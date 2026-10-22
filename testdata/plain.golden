@@ -1,0 +1,11 @@
+Checking repositories in: <root>
+Legend: ✅ Clean repo | ❌ Dirty repo | ⚠️ Directory / error
+Showing non-standard branches (hiding main master trunk)
+---------------------------------------------------------
+⚠️ <root>
+├── ✅ alpha
+├── ❌ beta [M]
+└── ⚠️ group
+    └── ✅ gamma (feature, no upstream) · vs main ↑1 ↓0
+
+Found 3 git repositories in <elapsed>
