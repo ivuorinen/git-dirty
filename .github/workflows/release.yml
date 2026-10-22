@@ -1,0 +1,47 @@
+---
+name: Release
+
+on:
+  push:
+    tags:
+      - "20*"
+
+permissions: {}
+
+# A release is never cancelled part-way: a second tag waits for the first.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    # No attestations are produced, so attestations: write is deliberately
+    # not granted.
+    permissions:
+      contents: write  # create the GitHub release and upload its assets
+      id-token: write  # cosign keyless signing of the checksums file
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          # goreleaser publishes through GITHUB_TOKEN in its environment and
+          # only reads git history, so the token need not stay in git config.
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Signed release artifacts are built from a clean cache: a restored
+          # build cache is an input nothing in this job verifies.
+          cache: false
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de  # v7.3.0
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

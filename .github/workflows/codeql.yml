@@ -1,0 +1,39 @@
+---
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: "CodeQL"
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "30 1 * * 0"
+  merge_group:
+
+permissions: {}
+
+# A newer push to the same ref supersedes the running analysis.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read  # analyze the workflow files themselves
+      contents: read  # check out the code
+      packages: read  # fetch CodeQL query packs
+      security-events: write  # upload the SARIF results
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["actions", "go"]
+    steps:
+      - name: CodeQL Analysis
+        uses: ivuorinen/actions/codeql-analysis@de31e11dda6488eabe95e951ebb61c6d9d500865  # v2026.06.30
+        with:
+          language: ${{ matrix.language }}
+          queries: security-and-quality
