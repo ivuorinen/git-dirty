@@ -44,6 +44,7 @@ func (r *Repository) objects() *odb {
 		r.odb = &odb{dir: filepath.Join(r.CommonDir, "objects"), f: r.Format}
 		r.odb.cache.limit = baseCacheBytes
 	}
+
 	return r.odb
 }
 
@@ -61,6 +62,7 @@ func (o *odb) close() error {
 		}
 	}
 	o.packs, o.packsLoaded = nil, false
+
 	return first
 }
 
@@ -82,12 +84,14 @@ func (o *odb) loadPacks() error {
 	for _, name := range idxFiles {
 		p, err := openPack(filepath.Join(o.dir, "pack", name), o.f)
 		if err != nil {
-			o.close()
+			_ = o.close() // read-only files; the open error is the one to report
+
 			return err
 		}
 		o.packs = append(o.packs, p)
 	}
 	o.packsLoaded = true
+
 	return nil
 }
 
@@ -108,6 +112,7 @@ func (o *odb) read(id ObjectID, depth int) (ObjectType, []byte, error) {
 			if err != nil {
 				return 0, nil, fmt.Errorf("object %s: %w", id, err)
 			}
+
 			return t, data, nil
 		}
 	}
@@ -116,11 +121,13 @@ func (o *odb) read(id ObjectID, depth int) (ObjectType, []byte, error) {
 		if _, statErr := os.Stat(filepath.Join(o.dir, "info", "alternates")); statErr == nil {
 			return 0, nil, fmt.Errorf("object %s: %w (objects/info/alternates is not supported)", id, ErrObjectNotFound)
 		}
+
 		return 0, nil, fmt.Errorf("object %s: %w", id, ErrObjectNotFound)
 	}
 	if err != nil {
 		return 0, nil, fmt.Errorf("object %s: %w", id, err)
 	}
+
 	return t, data, nil
 }
 
@@ -128,39 +135,9 @@ func (o *odb) read(id ObjectID, depth int) (ObjectType, []byte, error) {
 // pack and REF_DELTA bases through the whole database, then applies the
 // deltas from the base outward.
 func (o *odb) readPacked(p *pack, off int64, depth int) (ObjectType, []byte, error) {
-	var chain []packEntry
-	var baseType ObjectType
-	var base []byte
-	for cur := off; ; {
-		if depth+len(chain) > maxDeltaDepth {
-			return 0, nil, fmt.Errorf("delta chain deeper than %d", maxDeltaDepth)
-		}
-		if t, data, ok := o.cache.get(p, cur); ok {
-			baseType, base = t, data
-			break
-		}
-		e, err := p.entry(cur)
-		if err != nil {
-			return 0, nil, err
-		}
-		switch e.typ {
-		case objOfsDelta:
-			chain = append(chain, e)
-			cur = e.baseOff
-			continue
-		case objRefDelta:
-			chain = append(chain, e)
-			if baseType, base, err = o.read(e.baseID, depth+len(chain)); err != nil {
-				return 0, nil, err
-			}
-		default:
-			if base, err = p.inflate(e); err != nil {
-				return 0, nil, fmt.Errorf("pack offset %d: %w", cur, err)
-			}
-			baseType = e.typ
-			o.cache.put(p, cur, baseType, base)
-		}
-		break
+	chain, baseType, base, err := o.packedBase(p, off, depth)
+	if err != nil {
+		return 0, nil, err
 	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		e := chain[i]
@@ -173,7 +150,54 @@ func (o *odb) readPacked(p *pack, off int64, depth int) (ObjectType, []byte, err
 		}
 		o.cache.put(p, e.off, baseType, base)
 	}
+
 	return baseType, base, nil
+}
+
+// packedBase walks the delta chain from the entry at off down to its base:
+// a cached object, a REF_DELTA base read through the whole database, or a
+// whole object in the pack. It returns the delta entries crossed, outermost
+// first, and the base.
+func (o *odb) packedBase(p *pack, off int64, depth int) ([]packEntry, ObjectType, []byte, error) {
+	var chain []packEntry
+	for cur := off; ; {
+		if depth+len(chain) > maxDeltaDepth {
+			return nil, 0, nil, fmt.Errorf("delta chain deeper than %d", maxDeltaDepth)
+		}
+		if t, data, ok := o.cache.get(p, cur); ok {
+			return chain, t, data, nil
+		}
+		e, err := p.entry(cur)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		switch e.typ {
+		case objOfsDelta:
+			chain = append(chain, e)
+			cur = e.baseOff
+
+			continue
+		case objRefDelta:
+			chain = append(chain, e)
+			t, data, err := o.read(e.baseID, depth+len(chain))
+			if err != nil {
+				return nil, 0, nil, err
+			}
+
+			return chain, t, data, nil
+		case ObjCommit, ObjTree, ObjBlob, ObjTag:
+			data, err := p.inflate(e)
+			if err != nil {
+				return nil, 0, nil, fmt.Errorf("pack offset %d: %w", cur, err)
+			}
+			o.cache.put(p, cur, e.typ, data)
+
+			return chain, e.typ, data, nil
+		}
+
+		// pack.entry accepts no other type.
+		return nil, 0, nil, fmt.Errorf("pack offset %d: invalid type %d", cur, e.typ)
+	}
 }
 
 func (o *odb) readLoose(id ObjectID) (ObjectType, []byte, error) {
@@ -185,21 +209,36 @@ func (o *odb) readLoose(id ObjectID) (ObjectType, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only
 	zr, err := zlib.NewReader(bufio.NewReader(f))
 	if err != nil {
 		return 0, nil, fmt.Errorf("loose object: %w", err)
 	}
-	defer zr.Close()
-	// Header: "<type> <size>\0", at most a few dozen bytes.
+	// readExact has checked the stream's end and checksum; Close adds nothing.
+	defer func() { _ = zr.Close() }()
+	t, size, err := readLooseHeader(zr)
+	if err != nil {
+		return 0, nil, err
+	}
+	data, err := readExact(zr, size)
+	if err != nil {
+		return 0, nil, fmt.Errorf("loose object: %w", err)
+	}
+
+	return t, data, nil
+}
+
+// readLooseHeader reads a loose object's "<type> <size>\0" header, at most a
+// few dozen bytes.
+func readLooseHeader(r io.Reader) (ObjectType, uint64, error) {
 	var hdr [64]byte
 	n := 0
 	for {
 		if n == len(hdr) {
-			return 0, nil, errors.New("loose object header too long")
+			return 0, 0, errors.New("loose object header too long")
 		}
-		if _, err := io.ReadFull(zr, hdr[n:n+1]); err != nil {
-			return 0, nil, fmt.Errorf("loose object header: %w", err)
+		if _, err := io.ReadFull(r, hdr[n:n+1]); err != nil {
+			return 0, 0, fmt.Errorf("loose object header: %w", err)
 		}
 		if hdr[n] == 0 {
 			break
@@ -210,29 +249,23 @@ func (o *odb) readLoose(id ObjectID) (ObjectType, []byte, error) {
 	t, typeOK := parseObjectType(string(typeName))
 	size, sizeErr := strconv.ParseUint(string(sizeStr), 10, 64)
 	if !ok || !typeOK || sizeErr != nil {
-		return 0, nil, fmt.Errorf("loose object: malformed header %q", hdr[:n])
+		return 0, 0, fmt.Errorf("loose object: malformed header %q", hdr[:n])
 	}
 	if size > maxObjectSize {
-		return 0, nil, fmt.Errorf("loose object declares %d bytes, over the limit", size)
+		return 0, 0, fmt.Errorf("loose object declares %d bytes, over the limit", size)
 	}
-	data, err := readExact(zr, size)
-	if err != nil {
-		return 0, nil, fmt.Errorf("loose object: %w", err)
-	}
-	return t, data, nil
+
+	return t, size, nil
 }
 
+// parseObjectType maps an object header's type name to its type.
 func parseObjectType(s string) (ObjectType, bool) {
-	switch s {
-	case "commit":
-		return ObjCommit, true
-	case "tree":
-		return ObjTree, true
-	case "blob":
-		return ObjBlob, true
-	case "tag":
-		return ObjTag, true
+	for _, t := range [...]ObjectType{ObjCommit, ObjTree, ObjBlob, ObjTag} {
+		if t.String() == s {
+			return t, true
+		}
 	}
+
 	return 0, false
 }
 
@@ -242,7 +275,9 @@ func inflateExact(r io.Reader, size uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer zr.Close()
+	// readExact has checked the stream's end and checksum; Close adds nothing.
+	defer func() { _ = zr.Close() }()
+
 	return readExact(zr, size)
 }
 
@@ -267,6 +302,7 @@ func readExact(r io.Reader, size uint64) ([]byte, error) {
 			return nil, fmt.Errorf("content longer than its declared %d bytes", size)
 		}
 	}
+
 	return data, nil
 }
 
@@ -291,6 +327,7 @@ type cacheEntry struct {
 
 func (c *baseCache) get(p *pack, off int64) (ObjectType, []byte, bool) {
 	e, ok := c.m[cacheKey{p, off}]
+
 	return e.t, e.data, ok
 }
 

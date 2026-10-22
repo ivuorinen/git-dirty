@@ -18,6 +18,9 @@ var ErrRefNotFound = errors.New("reference not found")
 // symrefMaxDepth is git's SYMREF_MAXDEPTH.
 const symrefMaxDepth = 5
 
+// headRef is the one valid reference name outside refs/.
+const headRef = "HEAD"
+
 // Ref is one reference as stored: symbolic (Target set) or direct (ID set).
 // Peeled is the commit an annotated tag points at, when packed-refs records
 // it.
@@ -38,14 +41,24 @@ type packedRef struct {
 // some come from repository config a hostile clone controls, so anything
 // that could escape refs/ is rejected.
 func ValidRefName(name string) bool {
-	if name == "HEAD" {
+	if name == headRef {
 		return true
 	}
-	if !strings.HasPrefix(name, "refs/") || strings.HasSuffix(name, "/") ||
-		strings.HasSuffix(name, ".") || strings.Contains(name, "..") ||
-		strings.Contains(name, "@{") || strings.Contains(name, "//") {
-		return false
-	}
+
+	return strings.HasPrefix(name, "refs/") && !hasBadRefSequence(name) &&
+		validRefBytes(name) && validRefComponents(name)
+}
+
+// hasBadRefSequence reports a trailing "/" or ".", or a "..", "@{" or "//"
+// anywhere in name.
+func hasBadRefSequence(name string) bool {
+	return strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") ||
+		strings.Contains(name, "..") || strings.Contains(name, "@{") || strings.Contains(name, "//")
+}
+
+// validRefBytes reports that name has no control characters and none of
+// git's special characters.
+func validRefBytes(name string) bool {
 	for i := 0; i < len(name); i++ {
 		switch c := name[i]; {
 		case c < 0x20 || c == 0x7f:
@@ -54,11 +67,19 @@ func ValidRefName(name string) bool {
 			return false
 		}
 	}
+
+	return true
+}
+
+// validRefComponents reports that no component of name is empty, starts
+// with "." or ends with ".lock".
+func validRefComponents(name string) bool {
 	for _, part := range strings.Split(name, "/") {
 		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -66,10 +87,11 @@ func ValidRefName(name string) bool {
 // git dir, everything else in the common dir.
 func (r *Repository) refPath(name string) string {
 	dir := r.CommonDir
-	if name == "HEAD" || strings.HasPrefix(name, "refs/bisect/") ||
+	if name == headRef || strings.HasPrefix(name, "refs/bisect/") ||
 		strings.HasPrefix(name, "refs/worktree/") || strings.HasPrefix(name, "refs/rewritten/") {
 		dir = r.GitDir
 	}
+
 	return filepath.Join(dir, filepath.FromSlash(name))
 }
 
@@ -86,7 +108,7 @@ func (r *Repository) ReadRef(name string) (Ref, error) {
 	case !errors.Is(err, fs.ErrNotExist) && !isDirErr(err):
 		return Ref{}, err
 	}
-	if name == "HEAD" {
+	if name == headRef {
 		return Ref{}, fmt.Errorf("HEAD: %w", ErrRefNotFound)
 	}
 	packed, err := r.packedRefs()
@@ -96,6 +118,7 @@ func (r *Repository) ReadRef(name string) (Ref, error) {
 	if p, ok := packed[name]; ok {
 		return Ref{Name: name, ID: p.id, Peeled: p.peeled}, nil
 	}
+
 	return Ref{}, fmt.Errorf("%s: %w", name, ErrRefNotFound)
 }
 
@@ -105,8 +128,10 @@ func isDirErr(err error) bool {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
 		fi, statErr := os.Stat(pe.Path)
+
 		return statErr == nil && fi.IsDir()
 	}
+
 	return false
 }
 
@@ -117,12 +142,14 @@ func (r *Repository) parseLooseRef(name string, b []byte) (Ref, error) {
 		if !ValidRefName(target) {
 			return Ref{}, fmt.Errorf("%s: invalid symbolic target %q", name, target)
 		}
+
 		return Ref{Name: name, Target: target}, nil
 	}
 	id, err := r.Format.ParseHex(s)
 	if err != nil {
 		return Ref{}, fmt.Errorf("%s: invalid content: %w", name, err)
 	}
+
 	return Ref{Name: name, ID: id}, nil
 }
 
@@ -138,6 +165,7 @@ func (r *Repository) Resolve(name string) (ObjectID, error) {
 		}
 		name = ref.Target
 	}
+
 	return ObjectID{}, fmt.Errorf("%s: symbolic reference chain deeper than %d", name, symrefMaxDepth)
 }
 
@@ -151,44 +179,56 @@ func (r *Repository) packedRefs() (map[string]packedRef, error) {
 	f, err := os.Open(filepath.Join(r.CommonDir, "packed-refs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		r.packed, r.packedRead = refs, true
+
 		return refs, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 4096), 1<<20)
 	last := ""
 	for line := 1; sc.Scan(); line++ {
 		text := bytes.TrimRight(sc.Bytes(), "\r")
-		switch {
-		case len(text) == 0 || text[0] == '#':
+		if len(text) == 0 || text[0] == '#' {
 			continue
-		case text[0] == '^':
-			id, err := r.Format.ParseHex(string(text[1:]))
-			if err != nil || last == "" {
-				return nil, fmt.Errorf("packed-refs line %d: bad peeled line", line)
-			}
-			p := refs[last]
-			p.peeled = id
-			refs[last] = p
-			last = ""
-		default:
-			hexID, name, ok := strings.Cut(string(text), " ")
-			id, err := r.Format.ParseHex(hexID)
-			if !ok || err != nil || !ValidRefName(name) {
-				return nil, fmt.Errorf("packed-refs line %d: malformed", line)
-			}
-			refs[name] = packedRef{id: id}
-			last = name
+		}
+		if last, err = r.packedRefLine(refs, text, last, line); err != nil {
+			return nil, err
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
 	r.packed, r.packedRead = refs, true
+
 	return refs, nil
+}
+
+// packedRefLine adds one packed-refs line to refs: "<id> <name>", or
+// "^<id>" peeling last, the ref on the line before. It returns the ref a
+// following "^<id>" line may peel.
+func (r *Repository) packedRefLine(refs map[string]packedRef, text []byte, last string, line int) (string, error) {
+	if text[0] == '^' {
+		id, err := r.Format.ParseHex(string(text[1:]))
+		if err != nil || last == "" {
+			return "", fmt.Errorf("packed-refs line %d: bad peeled line", line)
+		}
+		p := refs[last]
+		p.peeled = id
+		refs[last] = p
+
+		return "", nil
+	}
+	hexID, name, ok := strings.Cut(string(text), " ")
+	id, err := r.Format.ParseHex(hexID)
+	if !ok || err != nil || !ValidRefName(name) {
+		return "", fmt.Errorf("packed-refs line %d: malformed", line)
+	}
+	refs[name] = packedRef{id: id}
+
+	return name, nil
 }
 
 // Tags returns every refs/tags/ reference, loose and packed, sorted by name.
@@ -204,12 +244,28 @@ func (r *Repository) Tags() ([]Ref, error) {
 			byName[name] = Ref{Name: name, ID: p.id, Peeled: p.peeled}
 		}
 	}
+	if err := r.looseTags(byName); err != nil {
+		return nil, err
+	}
+	out := make([]Ref, 0, len(byName))
+	for _, ref := range byName {
+		out = append(out, ref)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+
+	return out, nil
+}
+
+// looseTags adds every loose ref under refs/tags/ to byName.
+func (r *Repository) looseTags(byName map[string]Ref) error {
 	root := filepath.Join(r.CommonDir, "refs", "tags")
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil
 			}
+
 			return err
 		}
 		if !d.Type().IsRegular() {
@@ -228,15 +284,7 @@ func (r *Repository) Tags() ([]Ref, error) {
 			return err
 		}
 		byName[name] = ref
+
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Ref, 0, len(byName))
-	for _, ref := range byName {
-		out = append(out, ref)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -30,15 +31,17 @@ const (
 )
 
 func openPack(idxPath string, f Format) (*pack, error) {
-	file, err := os.Open(idxPath)
+	file, err := os.Open(filepath.Clean(idxPath))
 	if err != nil {
 		return nil, err
 	}
 	p := &pack{name: strings.TrimSuffix(idxPath, ".idx"), f: f, idx: file}
 	if err := p.readIdxHeader(); err != nil {
-		file.Close()
+		_ = file.Close() // read-only; the header error is the one to report
+
 		return nil, fmt.Errorf("%s: %w", idxPath, err)
 	}
+
 	return p, nil
 }
 
@@ -69,6 +72,7 @@ func (p *pack) readIdxHeader() error {
 	if p.idxSize < minSize {
 		return fmt.Errorf("pack index too small for %d objects", p.count)
 	}
+
 	return nil
 }
 
@@ -96,6 +100,7 @@ func (p *pack) find(id ObjectID) (int64, bool, error) {
 		switch c := bytes.Compare(buf, key); {
 		case c == 0:
 			off, err := p.offset(mid)
+
 			return off, err == nil, err
 		case c < 0:
 			lo = mid + 1
@@ -103,6 +108,7 @@ func (p *pack) find(id ObjectID) (int64, bool, error) {
 			hi = mid
 		}
 	}
+
 	return 0, false, nil
 }
 
@@ -128,6 +134,7 @@ func (p *pack) offset(i uint32) (int64, error) {
 	if big > 1<<62 {
 		return 0, errors.New("pack index large offset out of range")
 	}
+
 	return int64(big), nil
 }
 
@@ -140,22 +147,32 @@ func (p *pack) openData() error {
 	if err != nil {
 		return err
 	}
+	size, err := p.checkData(file)
+	if err != nil {
+		_ = file.Close() // read-only; the header error is the one to report
+
+		return err
+	}
+	p.data, p.dataSize = file, size
+
+	return nil
+}
+
+// checkData checks a .pack file's header and returns the file's size.
+func (p *pack) checkData(file *os.File) (int64, error) {
 	fi, err := file.Stat()
 	if err != nil {
-		file.Close()
-		return err
+		return 0, err
 	}
 	var hdr [12]byte
 	if _, err := file.ReadAt(hdr[:], 0); err != nil {
-		file.Close()
-		return fmt.Errorf("%s.pack: header: %w", p.name, err)
+		return 0, fmt.Errorf("%s.pack: header: %w", p.name, err)
 	}
 	if v := binary.BigEndian.Uint32(hdr[4:8]); string(hdr[:4]) != "PACK" || (v != 2 && v != 3) {
-		file.Close()
-		return fmt.Errorf("%s.pack: not a version 2 or 3 pack", p.name)
+		return 0, fmt.Errorf("%s.pack: not a version 2 or 3 pack", p.name)
 	}
-	p.data, p.dataSize = file, fi.Size()
-	return nil
+
+	return fi.Size(), nil
 }
 
 func (p *pack) close() error {
@@ -165,6 +182,7 @@ func (p *pack) close() error {
 			err = e
 		}
 	}
+
 	return err
 }
 
@@ -180,80 +198,133 @@ type packEntry struct {
 
 // entry parses the entry header at off.
 func (p *pack) entry(off int64) (packEntry, error) {
-	if err := p.openData(); err != nil {
-		return packEntry{}, err
-	}
-	if off < 12 || off >= p.dataSize {
-		return packEntry{}, fmt.Errorf("pack offset %d out of range", off)
-	}
-	var buf [16 + maxHashSize]byte
-	n, err := p.data.ReadAt(buf[:], off)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return packEntry{}, err
-	}
-	b := buf[:n]
-	pos := 0
-	next := func() (byte, error) {
-		if pos >= len(b) {
-			return 0, fmt.Errorf("pack entry header at %d truncated", off)
-		}
-		c := b[pos]
-		pos++
-		return c, nil
-	}
-	c, err := next()
+	b, err := p.entryHeader(off)
 	if err != nil {
 		return packEntry{}, err
 	}
-	e := packEntry{off: off, typ: ObjectType(c >> 4 & 7), size: uint64(c & 0x0f)}
-	for shift := 4; c&0x80 != 0; shift += 7 {
-		if shift > 60 {
-			return packEntry{}, fmt.Errorf("pack entry size at %d too long", off)
-		}
-		if c, err = next(); err != nil {
-			return packEntry{}, err
-		}
-		e.size |= uint64(c&0x7f) << shift
+	r := entryReader{b: b, off: off}
+	e, err := r.typeAndSize()
+	if err != nil {
+		return packEntry{}, err
 	}
 	switch e.typ {
 	case ObjCommit, ObjTree, ObjBlob, ObjTag:
 	case objOfsDelta:
-		// git's offset encoding: each continuation adds one before shifting.
-		if c, err = next(); err != nil {
-			return packEntry{}, err
-		}
-		rel := uint64(c & 0x7f)
-		for i := 0; c&0x80 != 0; i++ {
-			if i > 8 {
-				return packEntry{}, fmt.Errorf("pack delta offset at %d too long", off)
-			}
-			if c, err = next(); err != nil {
-				return packEntry{}, err
-			}
-			rel = (rel+1)<<7 | uint64(c&0x7f)
-		}
-		if rel == 0 || rel >= uint64(off) {
-			return packEntry{}, fmt.Errorf("pack delta at %d has an invalid base offset", off)
-		}
-		e.baseOff = off - int64(rel)
+		e.baseOff, err = r.ofsDeltaBase()
 	case objRefDelta:
-		if pos+p.f.Size > len(b) {
-			return packEntry{}, fmt.Errorf("pack entry header at %d truncated", off)
-		}
-		e.baseID, _ = p.f.IDFromBytes(b[pos : pos+p.f.Size])
-		pos += p.f.Size
+		e.baseID, err = r.refDeltaBase(p.f)
 	default:
-		return packEntry{}, fmt.Errorf("pack entry at %d has invalid type %d", off, e.typ)
+		err = fmt.Errorf("pack entry at %d has invalid type %d", off, e.typ)
+	}
+	if err != nil {
+		return packEntry{}, err
 	}
 	if e.size > maxObjectSize {
 		return packEntry{}, fmt.Errorf("pack entry at %d declares %d bytes, over the limit", off, e.size)
 	}
-	e.dataOff = off + int64(pos)
+	e.dataOff = off + int64(r.pos)
+
 	return e, nil
+}
+
+// entryHeader reads the bytes at off that can hold an entry header: up to
+// its size varint and a REF_DELTA base id, less at the end of the pack.
+func (p *pack) entryHeader(off int64) ([]byte, error) {
+	if err := p.openData(); err != nil {
+		return nil, err
+	}
+	if off < 12 || off >= p.dataSize {
+		return nil, fmt.Errorf("pack offset %d out of range", off)
+	}
+	var buf [16 + maxHashSize]byte
+	n, err := p.data.ReadAt(buf[:], off)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+
+	return buf[:n], nil
+}
+
+// entryReader reads a pack entry header from the bytes at offset off.
+type entryReader struct {
+	b   []byte
+	pos int
+	off int64
+}
+
+func (r *entryReader) next() (byte, error) {
+	if r.pos >= len(r.b) {
+		return 0, fmt.Errorf("pack entry header at %d truncated", r.off)
+	}
+	c := r.b[r.pos]
+	r.pos++
+
+	return c, nil
+}
+
+// typeAndSize reads the first header byte's type and the inflated size,
+// four bits there and seven in each continuation byte.
+func (r *entryReader) typeAndSize() (packEntry, error) {
+	c, err := r.next()
+	if err != nil {
+		return packEntry{}, err
+	}
+	e := packEntry{off: r.off, typ: ObjectType(c >> 4 & 7), size: uint64(c & 0x0f)}
+	for shift := 4; c&0x80 != 0; shift += 7 {
+		if shift > 60 {
+			return packEntry{}, fmt.Errorf("pack entry size at %d too long", r.off)
+		}
+		if c, err = r.next(); err != nil {
+			return packEntry{}, err
+		}
+		e.size |= uint64(c&0x7f) << shift
+	}
+
+	return e, nil
+}
+
+// ofsDeltaBase reads an OFS_DELTA's base offset, which must lie before the
+// entry. git's offset encoding: each continuation adds one before shifting.
+func (r *entryReader) ofsDeltaBase() (int64, error) {
+	c, err := r.next()
+	if err != nil {
+		return 0, err
+	}
+	rel := uint64(c & 0x7f)
+	for i := 0; c&0x80 != 0; i++ {
+		if i > 8 {
+			return 0, fmt.Errorf("pack delta offset at %d too long", r.off)
+		}
+		if c, err = r.next(); err != nil {
+			return 0, err
+		}
+		rel = (rel+1)<<7 | uint64(c&0x7f)
+	}
+	off := r.off
+	if off < 0 {
+		return 0, fmt.Errorf("pack delta at %d has an invalid base offset", off)
+	}
+	if rel == 0 || rel >= uint64(off) {
+		return 0, fmt.Errorf("pack delta at %d has an invalid base offset", off)
+	}
+
+	return off - int64(rel), nil
+}
+
+// refDeltaBase reads a REF_DELTA's base object id.
+func (r *entryReader) refDeltaBase(f Format) (ObjectID, error) {
+	if r.pos+f.Size > len(r.b) {
+		return ObjectID{}, fmt.Errorf("pack entry header at %d truncated", r.off)
+	}
+	id, _ := f.IDFromBytes(r.b[r.pos : r.pos+f.Size])
+	r.pos += f.Size
+
+	return id, nil
 }
 
 // inflate decompresses exactly e.size bytes of e's zlib stream.
 func (p *pack) inflate(e packEntry) ([]byte, error) {
 	r := io.NewSectionReader(p.data, e.dataOff, p.dataSize-e.dataOff)
+
 	return inflateExact(r, e.size)
 }

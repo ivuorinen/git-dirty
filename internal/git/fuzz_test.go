@@ -11,7 +11,7 @@ import (
 // The fuzz targets check the decoders' contract on arbitrary input: no
 // panic, no result larger than the input allows, and termination. Seeds come
 // from files git wrote; `go test` runs the seeds (and testdata/fuzz) as
-// ordinary tests.
+// ordinary tests. Decode errors are expected and ignored.
 
 func gitIndexSeed(f *testing.F) []byte {
 	f.Helper()
@@ -20,10 +20,11 @@ func gitIndexSeed(f *testing.F) []byte {
 	writeFile(f, dir, "d/b.txt", "b\n")
 	run(f, dir, "add", "-A")
 	run(f, dir, "commit", "-q", "-m", "seed")
-	data, err := os.ReadFile(filepath.Join(dir, ".git", "index"))
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(dir, ".git", "index")))
 	if err != nil {
 		f.Fatal(err)
 	}
+
 	return data
 }
 
@@ -41,8 +42,8 @@ func FuzzIndex(f *testing.F) {
 }
 
 func FuzzEWAH(f *testing.F) {
-	f.Add(ewah(70, rlw(true, 1, 1), 0b101))
-	f.Add(ewah(200, rlw(false, 2, 1), 1<<3))
+	f.Add(ewah(f, 70, rlw(true, 1, 1), 0b101))
+	f.Add(ewah(f, 200, rlw(false, 2, 1), 1<<3))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		bits, n, err := decodeEWAH(data)
 		if err != nil {
@@ -60,17 +61,19 @@ func FuzzEWAH(f *testing.F) {
 func FuzzConfig(f *testing.F) {
 	f.Add([]byte(configFixture))
 	f.Add([]byte("[a \"b\\\"c\"]\n\tk = \"v ; x\" \\\n y\n"))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		ParseConfig(data)
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		_, _ = ParseConfig(data)
 	})
 }
 
 func FuzzCommit(f *testing.F) {
 	f.Add([]byte("tree 0000000000000000000000000000000000000000\ncommitter C <c@x> 1700000000 +0200\n\nmsg"))
-	f.Add([]byte("tree 0000000000000000000000000000000000000000\nparent 1111111111111111111111111111111111111111\ngpgsig x\n y\ncommitter C <c@x> 1 -0130\n\n"))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		ParseCommit(data, SHA1)
-		ParseTag(data, SHA1)
+	f.Add([]byte("tree 0000000000000000000000000000000000000000\n" +
+		"parent 1111111111111111111111111111111111111111\n" +
+		"gpgsig x\n y\ncommitter C <c@x> 1 -0130\n\n"))
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		_, _ = ParseCommit(data, SHA1)
+		_, _ = ParseTag(data, SHA1)
 	})
 }
 
@@ -90,27 +93,38 @@ func FuzzTree(f *testing.F) {
 func fuzzRepo(t *testing.T) *Repository {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "objects", "pack"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "objects", "pack"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	return &Repository{GitDir: dir, CommonDir: dir, Format: SHA1, Config: &Config{}}
+	r := &Repository{GitDir: dir, CommonDir: dir, Format: SHA1, Config: &Config{}}
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	return r
 }
 
 func FuzzRefs(f *testing.F) {
-	f.Add([]byte("# pack-refs with: peeled fully-peeled sorted \n1111111111111111111111111111111111111111 refs/tags/v1\n^2222222222222222222222222222222222222222\n"), "refs/tags/v1")
-	f.Add([]byte("ref: refs/heads/main\n"), "HEAD")
+	f.Add([]byte("# pack-refs with: peeled fully-peeled sorted \n"+
+		"1111111111111111111111111111111111111111 refs/tags/v1\n"+
+		"^2222222222222222222222222222222222222222\n"),
+		"refs/tags/v1",
+	)
+	f.Add([]byte("ref: refs/heads/main\n"), headRef)
 	f.Fuzz(func(t *testing.T, data []byte, name string) {
 		r := fuzzRepo(t)
-		if err := os.WriteFile(filepath.Join(r.CommonDir, "packed-refs"), data, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(r.CommonDir, "packed-refs"), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(r.GitDir, "HEAD"), data, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(r.GitDir, headRef), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		r.Tags()
-		r.Resolve("HEAD")
+		_, _ = r.Tags()
+		_, _ = r.Resolve(headRef)
 		if ValidRefName(name) {
-			r.Resolve(name)
+			_, _ = r.Resolve(name)
 		}
 	})
 }
@@ -120,32 +134,30 @@ var fuzzPackID = SHA1.HashObject(ObjBlob, []byte("fuzz"))
 
 func FuzzPackEntryAndDelta(f *testing.F) {
 	content := []byte("hello")
-	f.Add(append([]byte{byte(ObjBlob)<<4 | 5}, zlibBytes(content)...), []byte("hello world"), []byte{11, 5, 0x91, 0, 5})
-	f.Add(append([]byte{byte(objOfsDelta)<<4 | 3, 0x01}, zlibBytes([]byte{1, 1, 0x90, 1})...), []byte{}, []byte{0x80})
+	f.Add(
+		append([]byte{byte(ObjBlob)<<4 | 5}, zlibBytes(f, content)...),
+		[]byte("hello world"),
+		[]byte{11, 5, 0x91, 0, 5},
+	)
+	f.Add(
+		append([]byte{byte(objOfsDelta)<<4 | 3, 0x01}, zlibBytes(f, []byte{1, 1, 0x90, 1})...),
+		[]byte{},
+		[]byte{0x80},
+	)
 	f.Fuzz(func(t *testing.T, entry, base, delta []byte) {
-		applyDelta(base, delta)
+		_, _ = applyDelta(base, delta)
 
 		r := fuzzRepo(t)
 		packData := append([]byte("PACK\x00\x00\x00\x02\x00\x00\x00\x01"), entry...)
 		packData = append(packData, make([]byte, 20)...)
-		idx := []byte("\377tOc\x00\x00\x00\x02")
-		key := fuzzPackID.Bytes()
-		for i := range 256 {
-			n := uint32(0)
-			if i >= int(key[0]) {
-				n = 1
-			}
-			idx = binary.BigEndian.AppendUint32(idx, n)
-		}
-		idx = append(idx, key...)
-		idx = binary.BigEndian.AppendUint32(idx, 0)
-		idx = binary.BigEndian.AppendUint32(idx, 12)
-		idx = append(idx, make([]byte, 40)...)
 		base2 := filepath.Join(r.CommonDir, "objects", "pack", "pack-f")
-		os.WriteFile(base2+".pack", packData, 0o644)
-		os.WriteFile(base2+".idx", idx, 0o644)
-		r.ReadObject(fuzzPackID)
-		r.Close()
+		if err := os.WriteFile(base2+".pack", packData, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(base2+".idx", idxSeed(fuzzPackID, false), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _ = r.ReadObject(fuzzPackID)
 	})
 }
 
@@ -163,14 +175,15 @@ func idxSeed(id ObjectID, large bool) []byte {
 		idx = binary.BigEndian.AppendUint32(idx, n)
 	}
 	idx = append(idx, key...)
-	idx = binary.BigEndian.AppendUint32(idx, 0)
+	idx = binary.BigEndian.AppendUint32(idx, 0) // CRC, not verified
 	if large {
 		idx = binary.BigEndian.AppendUint32(idx, 0x80000000)
 		idx = binary.BigEndian.AppendUint64(idx, 12)
 	} else {
 		idx = binary.BigEndian.AppendUint32(idx, 12)
 	}
-	return append(idx, make([]byte, 40)...)
+
+	return append(idx, make([]byte, 2*len(key))...) // pack and index checksums
 }
 
 func FuzzPackIdx(f *testing.F) {
@@ -178,17 +191,21 @@ func FuzzPackIdx(f *testing.F) {
 	f.Add(idxSeed(fuzzPackID, true))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		path := filepath.Join(t.TempDir(), "pack-x.idx")
-		if err := os.WriteFile(path, data, 0o644); err != nil {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		p, err := openPack(path, SHA1)
 		if err != nil {
 			return
 		}
-		defer p.close()
-		p.find(fuzzPackID)
+		defer func() {
+			if err := p.close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		_, _, _ = p.find(fuzzPackID)
 		for i := uint32(0); i < p.count && i < 64; i++ {
-			p.offset(i)
+			_, _ = p.offset(i)
 		}
 	})
 }

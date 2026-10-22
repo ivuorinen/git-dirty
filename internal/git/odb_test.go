@@ -3,12 +3,12 @@ package git
 import (
 	"bytes"
 	"compress/zlib"
-	"encoding/binary"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -17,63 +17,74 @@ var realRepos = flag.Bool("realrepos", false, "self-check every object of the fi
 
 // historyFixture builds a history whose objects delta well: one large file
 // edited a line at a time, plus a few others.
-func historyFixture(t testing.TB, f Format) string {
-	t.Helper()
-	dir := newRepo(t, f)
+func historyFixture(tb testing.TB, f Format) string {
+	tb.Helper()
+	dir := newRepo(tb, f)
 	lines := make([]string, 300)
 	for i := range lines {
 		lines[i] = fmt.Sprintf("line %d of a file that is edited a little in every commit", i)
 	}
 	for c := range 30 {
 		lines[(c*7)%len(lines)] = fmt.Sprintf("edited in commit %d", c)
-		writeFile(t, dir, "big.txt", strings.Join(lines, "\n")+"\n")
-		writeFile(t, dir, fmt.Sprintf("dir%d/file.txt", c%3), fmt.Sprintf("content %d\n", c))
-		run(t, dir, "add", "-A")
-		run(t, dir, "commit", "-q", "-m", fmt.Sprintf("commit %d", c))
+		writeFile(tb, dir, "big.txt", strings.Join(lines, "\n")+"\n")
+		writeFile(tb, dir, fmt.Sprintf("dir%d/file.txt", c%3), fmt.Sprintf("content %d\n", c))
+		run(tb, dir, "add", "-A")
+		run(tb, dir, "commit", "-q", "-m", fmt.Sprintf("commit %d", c))
 		if c%10 == 0 {
-			run(t, dir, "tag", "-a", "-m", "tag", fmt.Sprintf("v%d", c))
+			run(tb, dir, "tag", "-a", "-m", "tag", fmt.Sprintf("v%d", c))
 		}
 	}
+
 	return dir
 }
 
 // selfCheck reads every object git lists and checks its type, size, and that
 // hashing the content reproduces its id. It returns the object count.
-func selfCheck(t testing.TB, dir string) int {
-	t.Helper()
+func selfCheck(tb testing.TB, dir string) int {
+	tb.Helper()
 	r, err := OpenWorktree(dir)
 	if err != nil {
 		r, err = Open(dir) // a bare repository
 	}
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	defer r.Close()
-	list := run(t, dir, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype) %(objectsize)")
+	defer closeRepo(tb, r)
+	list := run(tb, dir, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype) %(objectsize)")
 	n := 0
 	for _, line := range strings.Split(list, "\n") {
 		parts := strings.Fields(line)
 		if len(parts) != 3 {
-			t.Fatalf("unexpected cat-file line %q", line)
+			tb.Fatalf("unexpected cat-file line %q", line)
 		}
 		id, err := r.Format.ParseHex(parts[0])
 		if err != nil {
-			t.Fatal(err)
+			tb.Fatal(err)
 		}
 		typ, data, err := r.ReadObject(id)
 		if err != nil {
-			t.Errorf("ReadObject(%s): %v", parts[0], err)
+			tb.Errorf("ReadObject(%s): %v", parts[0], err)
+
 			continue
 		}
-		if typ.String() != parts[1] || fmt.Sprint(len(data)) != parts[2] {
-			t.Errorf("%s: %s %d, git says %s %s", parts[0], typ, len(data), parts[1], parts[2])
+		if typ.String() != parts[1] || strconv.Itoa(len(data)) != parts[2] {
+			tb.Errorf("%s: %s %d, git says %s %s", parts[0], typ, len(data), parts[1], parts[2])
 		}
 		if got := r.Format.HashObject(typ, data); got != id {
-			t.Errorf("%s: content hashes to %s", parts[0], got)
+			tb.Errorf("%s: content hashes to %s", parts[0], got)
 		}
 		n++
 	}
+
 	return n
+}
+
+// closeRepo closes r, failing the test on an error.
+func closeRepo(tb testing.TB, r *Repository) {
+	tb.Helper()
+	if err := r.Close(); err != nil {
+		tb.Errorf("Close(%s): %v", r.GitDir, err)
+	}
 }
 
 // entryTypes counts the pack entry types in a repository's packs.
@@ -98,6 +109,7 @@ func entryTypes(t *testing.T, dir string) map[ObjectType]int {
 			counts[e.typ]++
 		}
 	}
+
 	return counts
 }
 
@@ -143,50 +155,37 @@ func writePack(t *testing.T, dir string, f Format, id ObjectID, entry []byte, la
 	t.Helper()
 	packData := append([]byte("PACK\x00\x00\x00\x02\x00\x00\x00\x01"), entry...)
 	packData = append(packData, make([]byte, f.Size)...) // trailer, not verified
-
-	idx := []byte("\377tOc\x00\x00\x00\x02")
-	key := id.Bytes()
-	for i := range 256 {
-		n := uint32(0)
-		if i >= int(key[0]) {
-			n = 1
-		}
-		idx = binary.BigEndian.AppendUint32(idx, n)
-	}
-	idx = append(idx, key...)
-	idx = binary.BigEndian.AppendUint32(idx, 0) // CRC, not verified
-	if largeOffset {
-		idx = binary.BigEndian.AppendUint32(idx, 0x80000000)
-		idx = binary.BigEndian.AppendUint64(idx, 12)
-	} else {
-		idx = binary.BigEndian.AppendUint32(idx, 12)
-	}
-	idx = append(idx, make([]byte, 2*f.Size)...)
 	base := filepath.Join(dir, ".git", "objects", "pack", "pack-test")
-	if err := os.WriteFile(base+".pack", packData, 0o644); err != nil {
+	if err := os.WriteFile(base+".pack", packData, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(base+".idx", idx, 0o644); err != nil {
+	if err := os.WriteFile(base+".idx", idxSeed(id, largeOffset), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func zlibBytes(b []byte) []byte {
+func zlibBytes(tb testing.TB, b []byte) []byte {
+	tb.Helper()
 	var buf bytes.Buffer
 	w := zlib.NewWriter(&buf)
-	w.Write(b)
-	w.Close()
+	if _, err := w.Write(b); err != nil {
+		tb.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		tb.Fatal(err)
+	}
+
 	return buf.Bytes()
 }
 
 func TestODB_LargeOffset(t *testing.T) {
+	const content = "hello"
 	dir := newRepo(t, SHA1)
-	content := []byte("hello")
-	id := SHA1.HashObject(ObjBlob, content)
-	entry := append([]byte{byte(ObjBlob)<<4 | byte(len(content))}, zlibBytes(content)...)
+	id := SHA1.HashObject(ObjBlob, []byte(content))
+	entry := append([]byte{byte(ObjBlob)<<4 | byte(len(content))}, zlibBytes(t, []byte(content))...)
 	writePack(t, dir, SHA1, id, entry, true)
 	typ, data, err := openRepo(t, dir).ReadObject(id)
-	if err != nil || typ != ObjBlob || string(data) != "hello" {
+	if err != nil || typ != ObjBlob || string(data) != content {
 		t.Errorf("ReadObject = %v %q %v", typ, data, err)
 	}
 }
@@ -194,7 +193,7 @@ func TestODB_LargeOffset(t *testing.T) {
 func TestODB_SelfReferencingRefDelta(t *testing.T) {
 	dir := newRepo(t, SHA1)
 	id := SHA1.HashObject(ObjBlob, []byte("loop"))
-	delta := zlibBytes([]byte{4, 4, 4, 'l', 'o', 'o', 'p'})
+	delta := zlibBytes(t, []byte{4, 4, 4, 'l', 'o', 'o', 'p'})
 	entry := append([]byte{byte(objRefDelta)<<4 | 7}, id.Bytes()...)
 	entry = append(entry, delta...)
 	writePack(t, dir, SHA1, id, entry, false)
@@ -208,27 +207,28 @@ func TestODB_CorruptLoose(t *testing.T) {
 	dir := newRepo(t, SHA1)
 	r := openRepo(t, dir)
 	cases := map[string][]byte{
-		"shorter than declared": zlibBytes([]byte("blob 10\x00abc")),
-		"longer than declared":  zlibBytes([]byte("blob 3\x00abcdef")),
-		"bad type":              zlibBytes([]byte("nope 3\x00abc")),
-		"over the size limit":   zlibBytes([]byte(fmt.Sprintf("blob %d\x00", maxObjectSize+1))),
+		"shorter than declared": zlibBytes(t, []byte("blob 10\x00abc")),
+		"longer than declared":  zlibBytes(t, []byte("blob 3\x00abcdef")),
+		"bad type":              zlibBytes(t, []byte("nope 3\x00abc")),
+		"over the size limit":   zlibBytes(t, []byte(fmt.Sprintf("blob %d\x00", maxObjectSize+1))),
 		"not zlib":              []byte("plain text"),
 	}
-	i := 0
 	for name, body := range cases {
 		id := SHA1.HashObject(ObjBlob, []byte(name))
 		hex := id.String()
 		p := filepath.Join(dir, ".git", "objects", hex[:2], hex[2:])
-		os.MkdirAll(filepath.Dir(p), 0o755)
-		if err := os.WriteFile(p, body, 0o644); err != nil {
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, body, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := r.ReadObject(id); err == nil {
 			t.Errorf("%s: want error", name)
 		}
-		i++
 	}
-	if _, _, err := r.ReadObject(SHA1.HashObject(ObjBlob, []byte("absent"))); err == nil || !strings.Contains(err.Error(), ErrObjectNotFound.Error()) {
+	_, _, err := r.ReadObject(SHA1.HashObject(ObjBlob, []byte("absent")))
+	if err == nil || !strings.Contains(err.Error(), ErrObjectNotFound.Error()) {
 		t.Errorf("absent object: err = %v", err)
 	}
 }
@@ -243,7 +243,12 @@ func TestApplyDelta(t *testing.T) {
 	}{
 		{"copy", base, []byte{11, 5, 0x91, 0, 5}, "hello"},
 		{"copy and insert", base, []byte{11, 8, 0x91, 6, 5, 3, '!', '!', '!'}, "world!!!"},
-		{"copy size zero means 64 KiB", bytes.Repeat([]byte{'x'}, 0x10000), []byte{0x80, 0x80, 4, 0x80, 0x80, 4, 0x80}, strings.Repeat("x", 0x10000)},
+		{
+			"copy size zero means 64 KiB",
+			bytes.Repeat([]byte{'x'}, 0x10000),
+			[]byte{0x80, 0x80, 4, 0x80, 0x80, 4, 0x80},
+			strings.Repeat("x", 0x10000),
+		},
 	}
 	for _, tt := range ok {
 		got, err := applyDelta(tt.base, tt.delta)
@@ -274,8 +279,66 @@ func TestApplyDelta(t *testing.T) {
 	}
 }
 
+// realRepo is a repository TestODB_RealRepos checks, with its pack size.
+type realRepo struct {
+	dir  string
+	size int64
+}
+
+// largestRepos finds the repositories with packs below root and returns the
+// n with the most pack bytes. Unreadable directories are skipped.
+func largestRepos(t *testing.T, root string, n int) []realRepo {
+	t.Helper()
+	var repos []realRepo
+	// The root is the developer's own ~/Code, from HOME or GIT_DIRTY_REAL_HOME.
+	//nolint:gosec // G703: an opt-in development check that walks a directory the developer names
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			t.Logf("skipping %s: %v", p, err)
+
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if d.Name() == "node_modules" || d.Name() == "vendor" {
+			return filepath.SkipDir
+		}
+		packDir := filepath.Join(p, ".git", "objects", "pack")
+		if fi, err := os.Stat(packDir); err == nil && fi.IsDir() {
+			repos = append(repos, realRepo{p, packBytes(packDir)})
+
+			return filepath.SkipDir
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(repos, func(i, j int) bool { return repos[i].size > repos[j].size })
+	if len(repos) > n {
+		repos = repos[:n]
+	}
+
+	return repos
+}
+
+// packBytes sums the sizes of the files in a pack directory.
+func packBytes(dir string) int64 {
+	var size int64
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil {
+			size += info.Size()
+		}
+	}
+
+	return size
+}
+
 // TestODB_RealRepos is a development check, off by default: run with
-// go test ./internal/git -run TestODB_RealRepos -realrepos -timeout 60m
+// go test ./internal/git -run TestODB_RealRepos -realrepos -timeout 60m.
 func TestODB_RealRepos(t *testing.T) {
 	if !*realRepos {
 		t.Skip("enable with -realrepos")
@@ -286,35 +349,7 @@ func TestODB_RealRepos(t *testing.T) {
 	if h := os.Getenv("GIT_DIRTY_REAL_HOME"); h != "" {
 		home = h
 	}
-	type repo struct {
-		dir  string
-		size int64
-	}
-	var repos []repo
-	filepath.WalkDir(filepath.Join(home, "Code"), func(p string, d os.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
-			return nil
-		}
-		if d.Name() == "node_modules" || d.Name() == "vendor" {
-			return filepath.SkipDir
-		}
-		if fi, err := os.Stat(filepath.Join(p, ".git", "objects", "pack")); err == nil && fi.IsDir() {
-			var size int64
-			entries, _ := os.ReadDir(filepath.Join(p, ".git", "objects", "pack"))
-			for _, e := range entries {
-				if info, err := e.Info(); err == nil {
-					size += info.Size()
-				}
-			}
-			repos = append(repos, repo{p, size})
-			return filepath.SkipDir
-		}
-		return nil
-	})
-	sort.Slice(repos, func(i, j int) bool { return repos[i].size > repos[j].size })
-	if len(repos) > 5 {
-		repos = repos[:5]
-	}
+	repos := largestRepos(t, filepath.Join(home, "Code"), 5)
 	if len(repos) == 0 {
 		t.Fatal("no repositories found; set GIT_DIRTY_REAL_HOME")
 	}

@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// buildDir is a directory-only pattern and the path it is checked on.
+const buildDir = "build/"
+
 // ignoredLikeWalk applies the per-directory .gitignore stack the way a tree
 // walk does: a path is ignored when it, or any directory above it, is.
 func ignoredLikeWalk(t *testing.T, dir, rel string, isDir, ignoreCase bool) bool {
@@ -29,6 +32,7 @@ func ignoredLikeWalk(t *testing.T, dir, rel string, isDir, ignoreCase bool) bool
 		}
 		cur = filepath.Join(cur, parts[i])
 	}
+
 	return false
 }
 
@@ -53,7 +57,7 @@ func TestMatcher_MatchesGit(t *testing.T) {
 		`\!bang`,
 		"*.o",
 		"!keep.o",
-		"build/",
+		buildDir,
 		"/anchored",
 		"**/logs",
 		"docs/**/tmp",
@@ -70,7 +74,7 @@ func TestMatcher_MatchesGit(t *testing.T) {
 	checkIgnore(t, dir, false, []string{
 		"#hash", "!bang", "hash",
 		"a.o", "keep.o", "sub/b.o",
-		"build/", "build", "src/build/", "src/build/x",
+		buildDir, "build", "src/build/", "src/build/x",
 		"anchored", "sub/anchored",
 		"logs/", "a/b/logs/", "logs/x", "a/logs/y",
 		"docs/tmp", "docs/a/b/tmp", "docs/a/tmpx",
@@ -87,7 +91,7 @@ func TestMatcher_IgnoreCase(t *testing.T) {
 	dir := newRepo(t, SHA1)
 	run(t, dir, "config", "core.ignorecase", "true")
 	writeFile(t, dir, ".gitignore", "*.LOG\nBuild/\nsub/Deep.txt\n")
-	checkIgnore(t, dir, true, []string{"x.log", "X.LOG", "build/", "BUILD/", "sub/deep.txt", "SUB/DEEP.TXT", "x.txt"})
+	checkIgnore(t, dir, true, []string{"x.log", "X.LOG", buildDir, "BUILD/", "sub/deep.txt", "SUB/DEEP.TXT", "x.txt"})
 }
 
 func TestParsePattern_Skips(t *testing.T) {

@@ -19,6 +19,7 @@ func ParseRefSpec(s string) (RefSpec, error) {
 		if strings.Contains(rest, ":") || strings.Count(rest, "*") > 1 {
 			return RefSpec{}, fmt.Errorf("refspec %q: invalid negative refspec", s)
 		}
+
 		return RefSpec{src: rest, negative: true}, nil
 	}
 	src, dst, ok := strings.Cut(s, ":")
@@ -28,6 +29,7 @@ func ParseRefSpec(s string) (RefSpec, error) {
 	if strings.Count(src, "*") > 1 || strings.Count(src, "*") != strings.Count(dst, "*") {
 		return RefSpec{}, fmt.Errorf("refspec %q: mismatched wildcards", s)
 	}
+
 	return RefSpec{src: src, dst: dst}, nil
 }
 
@@ -41,6 +43,7 @@ func (s RefSpec) match(name string) (string, bool) {
 	if len(name) < len(prefix)+len(suffix) || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
 		return "", false
 	}
+
 	return name[len(prefix) : len(name)-len(suffix)], true
 }
 
@@ -61,8 +64,10 @@ func MapRef(specs []RefSpec, name string) (string, bool) {
 			if s.dst == "" {
 				return "", false
 			}
+
 			return strings.Replace(s.dst, "*", star, 1), true
 		}
 	}
+
 	return "", false
 }

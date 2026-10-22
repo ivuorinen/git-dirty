@@ -30,8 +30,7 @@ type Commit struct {
 // ParseCommit parses a commit object's headers. Multi-line headers such as
 // gpgsig and mergetag (continuation lines start with a space) are skipped.
 func ParseCommit(data []byte, f Format) (*Commit, error) {
-	c := &Commit{}
-	haveTree, haveCommitter := false, false
+	p := commitParser{c: &Commit{}, f: f}
 	for len(data) > 0 {
 		line, rest, _ := bytes.Cut(data, []byte("\n"))
 		data = rest
@@ -42,37 +41,56 @@ func ParseCommit(data []byte, f Format) (*Commit, error) {
 			continue // continuation of a multi-line header
 		}
 		key, value, _ := bytes.Cut(line, []byte(" "))
-		switch string(key) {
-		case "tree":
-			if haveTree {
-				return nil, errors.New("commit: duplicate tree header")
-			}
-			id, err := f.ParseHex(string(value))
-			if err != nil {
-				return nil, fmt.Errorf("commit tree: %w", err)
-			}
-			c.Tree, haveTree = id, true
-		case "parent":
-			id, err := f.ParseHex(string(value))
-			if err != nil {
-				return nil, fmt.Errorf("commit parent: %w", err)
-			}
-			c.Parents = append(c.Parents, id)
-		case "committer":
-			t, err := parseSignatureTime(value)
-			if err != nil {
-				return nil, fmt.Errorf("commit committer: %w", err)
-			}
-			c.CommitTime, haveCommitter = t, true
+		if err := p.header(string(key), value); err != nil {
+			return nil, err
 		}
 	}
-	if !haveTree {
+	if !p.haveTree {
 		return nil, errors.New("commit: missing tree header")
 	}
-	if !haveCommitter {
+	if !p.haveCommitter {
 		return nil, errors.New("commit: missing committer header")
 	}
-	return c, nil
+
+	return p.c, nil
+}
+
+// commitParser is ParseCommit's state: the commit so far and which required
+// headers it has seen.
+type commitParser struct {
+	c                       *Commit
+	f                       Format
+	haveTree, haveCommitter bool
+}
+
+// header takes one commit header; headers git-dirty does not use are
+// ignored.
+func (p *commitParser) header(key string, value []byte) error {
+	switch key {
+	case "tree":
+		if p.haveTree {
+			return errors.New("commit: duplicate tree header")
+		}
+		id, err := p.f.ParseHex(string(value))
+		if err != nil {
+			return fmt.Errorf("commit tree: %w", err)
+		}
+		p.c.Tree, p.haveTree = id, true
+	case "parent":
+		id, err := p.f.ParseHex(string(value))
+		if err != nil {
+			return fmt.Errorf("commit parent: %w", err)
+		}
+		p.c.Parents = append(p.c.Parents, id)
+	case "committer":
+		t, err := parseSignatureTime(value)
+		if err != nil {
+			return fmt.Errorf("commit committer: %w", err)
+		}
+		p.c.CommitTime, p.haveCommitter = t, true
+	}
+
+	return nil
 }
 
 // parseSignatureTime reads "<name> <<email>> <unix seconds> <+hhmm>".
@@ -90,18 +108,30 @@ func parseSignatureTime(sig []byte) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("signature timestamp: %w", err)
 	}
 	loc := time.UTC
-	if len(fields) > 1 && len(fields[1]) == 5 && (fields[1][0] == '+' || fields[1][0] == '-') {
-		hh, err1 := strconv.Atoi(string(fields[1][1:3]))
-		mm, err2 := strconv.Atoi(string(fields[1][3:5]))
-		if err1 == nil && err2 == nil {
-			off := (hh*60 + mm) * 60
-			if fields[1][0] == '-' {
-				off = -off
-			}
-			loc = time.FixedZone(string(fields[1]), off)
-		}
+	if len(fields) > 1 {
+		loc = signatureZone(fields[1])
 	}
+
 	return time.Unix(secs, 0).In(loc), nil
+}
+
+// signatureZone parses a signature's "+hhmm" or "-hhmm" offset; anything
+// else is UTC.
+func signatureZone(tz []byte) *time.Location {
+	if len(tz) != 5 || (tz[0] != '+' && tz[0] != '-') {
+		return time.UTC
+	}
+	hh, err1 := strconv.Atoi(string(tz[1:3]))
+	mm, err2 := strconv.Atoi(string(tz[3:5]))
+	if err1 != nil || err2 != nil {
+		return time.UTC
+	}
+	off := (hh*60 + mm) * 60
+	if tz[0] == '-' {
+		off = -off
+	}
+
+	return time.FixedZone(string(tz), off)
 }
 
 // Tag holds the target of an annotated tag.
@@ -139,6 +169,7 @@ func ParseTag(data []byte, f Format) (*Tag, error) {
 	if !haveObject || t.Type == 0 {
 		return nil, errors.New("tag: missing object or type header")
 	}
+
 	return t, nil
 }
 
@@ -175,6 +206,7 @@ func ParseTree(data []byte, f Format) ([]TreeEntry, error) {
 		data = data[f.Size:]
 		entries = append(entries, TreeEntry{Mode: canonMode(uint32(mode)), Name: name, ID: id})
 	}
+
 	return entries, nil
 }
 
@@ -187,12 +219,14 @@ func canonMode(m uint32) uint32 {
 		if m&0o100 != 0 {
 			return ModeExecutable
 		}
+
 		return ModeRegular
 	case 0o120000:
 		return ModeSymlink
 	case 0o040000:
 		return ModeTree
 	}
+
 	return ModeGitlink
 }
 
@@ -209,6 +243,7 @@ func (r *Repository) ReadCommit(id ObjectID) (*Commit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("object %s: %w", id, err)
 	}
+
 	return c, nil
 }
 
@@ -228,6 +263,7 @@ func (r *Repository) Peel(id ObjectID) (ObjectID, error) {
 		}
 		id = tag.Object
 	}
+
 	return ObjectID{}, fmt.Errorf("tag chain deeper than %d", maxTagDepth)
 }
 
@@ -262,11 +298,13 @@ func (r *Repository) walkTree(id ObjectID, prefix string, fn func(string, TreeEn
 			if err := r.walkTree(e.ID, path+"/", fn, depth+1); err != nil {
 				return err
 			}
+
 			continue
 		}
 		if err := fn(path, e); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }

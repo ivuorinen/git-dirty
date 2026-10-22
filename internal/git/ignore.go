@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -50,6 +51,7 @@ func ParsePattern(line string, domain []string) (p Pattern, ok bool) {
 	}
 	p.segments = strings.Split(line, "/")
 	p.domain = append([]string(nil), domain...)
+
 	return p, true
 }
 
@@ -62,12 +64,13 @@ func trimTrailingSpaces(s string) string {
 		}
 		end--
 	}
+
 	return s[:end]
 }
 
 // ReadPatterns parses a gitignore-format file; a missing file has none.
 func ReadPatterns(file string, domain []string) ([]Pattern, error) {
-	b, err := os.ReadFile(file)
+	b, err := os.ReadFile(filepath.Clean(file))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -80,6 +83,7 @@ func ReadPatterns(file string, domain []string) ([]Pattern, error) {
 			ps = append(ps, p)
 		}
 	}
+
 	return ps, nil
 }
 
@@ -89,13 +93,8 @@ func (p Pattern) match(pathParts []string, isDir, ignoreCase bool) bool {
 	if p.dirOnly && !isDir {
 		return false
 	}
-	if len(pathParts) <= len(p.domain) {
+	if !p.inDomain(pathParts, ignoreCase) {
 		return false
-	}
-	for i, d := range p.domain {
-		if !equalName(d, pathParts[i], ignoreCase) {
-			return false
-		}
 	}
 	rel := pathParts[len(p.domain):]
 	if !p.anchored {
@@ -107,7 +106,22 @@ func (p Pattern) match(pathParts []string, isDir, ignoreCase bool) bool {
 		matchSegments(p.segments[:n-1], rel, ignoreCase) {
 		return true
 	}
+
 	return matchSegments(p.segments, rel, ignoreCase)
+}
+
+// inDomain reports whether path lies strictly below the pattern's domain.
+func (p Pattern) inDomain(pathParts []string, ignoreCase bool) bool {
+	if len(pathParts) <= len(p.domain) {
+		return false
+	}
+	for i, d := range p.domain {
+		if !equalName(d, pathParts[i], ignoreCase) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // matchSegments matches pattern segments against path segments, where "**"
@@ -125,11 +139,13 @@ func matchSegments(pat, parts []string, ignoreCase bool) bool {
 				return true
 			}
 		}
+
 		return false
 	}
 	if len(parts) == 0 || !globMatch(pat[0], parts[0], ignoreCase) {
 		return false
 	}
+
 	return matchSegments(pat[1:], parts[1:], ignoreCase)
 }
 
@@ -142,6 +158,7 @@ func globMatch(pattern, name string, ignoreCase bool) bool {
 	}
 	pattern = strings.ReplaceAll(pattern, "[!", "[^")
 	ok, err := path.Match(pattern, name)
+
 	return err == nil && ok
 }
 
@@ -149,6 +166,7 @@ func equalName(a, b string, ignoreCase bool) bool {
 	if ignoreCase {
 		return strings.EqualFold(a, b)
 	}
+
 	return a == b
 }
 
@@ -168,5 +186,6 @@ func (m Matcher) Ignored(pathParts []string, isDir bool) bool {
 			return !m.Patterns[i].negate
 		}
 	}
+
 	return false
 }

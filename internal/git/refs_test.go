@@ -17,6 +17,7 @@ func refRepo(t *testing.T, f Format) string {
 	run(t, dir, "tag", "v1")
 	run(t, dir, "tag", "-a", "-m", "annotated", "v2")
 	run(t, dir, "branch", "feature")
+
 	return dir
 }
 
@@ -28,6 +29,7 @@ func checkResolve(t *testing.T, dir string, names ...string) {
 		got, err := r.Resolve(name)
 		if err != nil {
 			t.Errorf("Resolve(%s): %v", name, err)
+
 			continue
 		}
 		if want := run(t, dir, "rev-parse", name); got.String() != want {
@@ -60,21 +62,21 @@ func checkTags(t *testing.T, dir string) {
 }
 
 func TestRefs_MatchGit(t *testing.T) {
-	names := []string{"HEAD", "refs/heads/main", "refs/heads/feature", "refs/tags/v1", "refs/tags/v2"}
+	names := []string{headRef, refMain, "refs/heads/feature", "refs/tags/v1", "refs/tags/v2"}
 	for _, f := range formats {
 		t.Run(f.Name, func(t *testing.T) {
 			t.Run("loose", func(t *testing.T) {
 				dir := refRepo(t, f)
 				checkResolve(t, dir, names...)
-				head, err := openRepo(t, dir).ReadRef("HEAD")
-				if err != nil || head.Target != run(t, dir, "symbolic-ref", "HEAD") {
+				head, err := openRepo(t, dir).ReadRef(headRef)
+				if err != nil || head.Target != run(t, dir, "symbolic-ref", headRef) {
 					t.Errorf("HEAD = %+v, %v", head, err)
 				}
 			})
 			t.Run("packed", func(t *testing.T) {
 				dir := refRepo(t, f)
 				run(t, dir, "pack-refs", "--all")
-				for _, loose := range []string{"refs/heads/main", "refs/tags/v2"} {
+				for _, loose := range []string{refMain, "refs/tags/v2"} {
 					if _, err := os.Stat(filepath.Join(dir, ".git", loose)); err == nil {
 						t.Fatalf("fixture: %s still loose after pack-refs", loose)
 					}
@@ -93,8 +95,8 @@ func TestRefs_MatchGit(t *testing.T) {
 			t.Run("symbolic chain", func(t *testing.T) {
 				dir := refRepo(t, f)
 				run(t, dir, "symbolic-ref", "refs/heads/alias", "refs/heads/feature")
-				run(t, dir, "symbolic-ref", "HEAD", "refs/heads/alias")
-				checkResolve(t, dir, "HEAD", "refs/heads/alias")
+				run(t, dir, "symbolic-ref", headRef, "refs/heads/alias")
+				checkResolve(t, dir, headRef, "refs/heads/alias")
 			})
 		})
 	}
@@ -127,7 +129,7 @@ func TestRefs_Errors(t *testing.T) {
 }
 
 func TestValidRefName(t *testing.T) {
-	valid := []string{"HEAD", "refs/heads/main", "refs/heads/feat/x-1_2", "refs/remotes/origin/HEAD", "refs/tags/v1.0"}
+	valid := []string{headRef, refMain, "refs/heads/feat/x-1_2", "refs/remotes/origin/HEAD", "refs/tags/v1.0"}
 	invalid := []string{
 		"", "main", "refs/", "refs/heads/../../config", "refs/heads/a\x00b", "refs/heads/a b",
 		"refs//x", "/refs/heads/x", "refs/heads/x/", "refs/heads/.hidden", "refs/heads/x.lock",
@@ -164,6 +166,6 @@ func TestOpen_FormatsAndWorktrees(t *testing.T) {
 		if w.CommonDir == w.GitDir {
 			t.Error("worktree commondir not followed")
 		}
-		checkResolve(t, wt, "HEAD", "refs/heads/main", "refs/heads/side")
+		checkResolve(t, wt, headRef, refMain, "refs/heads/side")
 	}
 }

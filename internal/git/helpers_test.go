@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,17 +31,24 @@ func TestMain(m *testing.M) {
 		"GIT_COMMITTER_NAME":  "Test",
 		"GIT_COMMITTER_EMAIL": "test@example.invalid",
 	} {
-		os.Setenv(k, v)
+		if err := os.Setenv(k, v); err != nil {
+			panic(err)
+		}
 	}
 	for _, k := range []string{"GIT_CONFIG_GLOBAL", "GIT_DIR", "GIT_WORK_TREE", "GIT_DEFAULT_HASH", "GIT_INDEX_FILE"} {
-		os.Unsetenv(k)
+		if err := os.Unsetenv(k); err != nil {
+			panic(err)
+		}
 	}
-	gitconfig := "[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[gc]\n\tauto = 0\n"
-	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(gitconfig), 0o644); err != nil {
+	gitconfig := "[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n" +
+		"[tag]\n\tgpgsign = false\n[gc]\n\tauto = 0\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(gitconfig), 0o600); err != nil {
 		panic(err)
 	}
 	code := m.Run()
-	os.RemoveAll(home)
+	if err := os.RemoveAll(home); err != nil {
+		fmt.Fprintln(os.Stderr, "removing the test home:", err)
+	}
 	os.Exit(code)
 }
 
@@ -48,20 +56,21 @@ func TestMain(m *testing.M) {
 var formats = []Format{SHA1, SHA256}
 
 // run runs git in dir and returns trimmed stdout; failure fails the test.
-func run(t testing.TB, dir string, args ...string) string {
-	t.Helper()
-	out, code := runCode(t, dir, nil, args...)
+func run(tb testing.TB, dir string, args ...string) string {
+	tb.Helper()
+	out, code := runCode(tb, dir, nil, args...)
 	if code != 0 {
-		t.Fatalf("git %s: exit %d: %s", strings.Join(args, " "), code, out)
+		tb.Fatalf("git %s: exit %d: %s", strings.Join(args, " "), code, out)
 	}
+
 	return out
 }
 
 // runCode runs git with optional stdin and returns trimmed stdout and the
 // exit code.
-func runCode(t testing.TB, dir string, stdin []byte, args ...string) (string, int) {
-	t.Helper()
-	cmd := exec.Command("git", args...)
+func runCode(tb testing.TB, dir string, stdin []byte, args ...string) (string, int) {
+	tb.Helper()
+	cmd := exec.Command("git", args...) //nolint:gosec // G204: git is the test oracle; the tests choose its arguments
 	cmd.Dir = dir
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -70,46 +79,54 @@ func runCode(t testing.TB, dir string, stdin []byte, args ...string) (string, in
 	}
 	err := cmd.Run()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			return strings.TrimSpace(out.String() + errb.String()), ee.ExitCode()
 		}
-		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+		tb.Fatalf("git %s: %v", strings.Join(args, " "), err)
 	}
+
 	return strings.TrimSpace(out.String()), 0
 }
 
-func writeFile(t testing.TB, dir, name, body string) {
-	t.Helper()
+func writeFile(tb testing.TB, dir, name, body string) {
+	tb.Helper()
 	p := filepath.Join(dir, filepath.FromSlash(name))
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		tb.Fatal(err)
 	}
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		tb.Fatal(err)
 	}
 }
 
-func commit(t testing.TB, dir, name, body, msg string) {
-	t.Helper()
-	writeFile(t, dir, name, body)
-	run(t, dir, "add", name)
-	run(t, dir, "commit", "-q", "-m", msg)
+func commit(tb testing.TB, dir, name, body, msg string) {
+	tb.Helper()
+	writeFile(tb, dir, name, body)
+	run(tb, dir, "add", name)
+	run(tb, dir, "commit", "-q", "-m", msg)
 }
 
-func openRepo(t testing.TB, worktree string) *Repository {
-	t.Helper()
+func openRepo(tb testing.TB, worktree string) *Repository {
+	tb.Helper()
 	r, err := OpenWorktree(worktree)
 	if err != nil {
-		t.Fatalf("OpenWorktree(%s): %v", worktree, err)
+		tb.Fatalf("OpenWorktree(%s): %v", worktree, err)
 	}
-	t.Cleanup(func() { r.Close() })
+	tb.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			tb.Errorf("Close(%s): %v", worktree, err)
+		}
+	})
+
 	return r
 }
 
 // newRepo initializes an empty repository in the given object format.
-func newRepo(t testing.TB, f Format) string {
-	t.Helper()
-	dir := t.TempDir()
-	run(t, dir, "init", "-q", "--object-format="+f.Name)
+func newRepo(tb testing.TB, f Format) string {
+	tb.Helper()
+	dir := tb.TempDir()
+	run(tb, dir, "init", "-q", "--object-format="+f.Name)
+
 	return dir
 }

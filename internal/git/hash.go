@@ -7,7 +7,7 @@
 package git
 
 import (
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // G505: SHA-1 is git's object id format here, not a security primitive
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -38,12 +38,14 @@ func (id ObjectID) IsZero() bool {
 			return false
 		}
 	}
+
 	return true
 }
 
 // ObjectType is a git object type, with the pack-only delta types.
 type ObjectType int
 
+// Object types, as numbered in pack entry headers.
 const (
 	ObjCommit   ObjectType = 1
 	ObjTree     ObjectType = 2
@@ -63,7 +65,10 @@ func (t ObjectType) String() string {
 		return "blob"
 	case ObjTag:
 		return "tag"
+	case objOfsDelta, objRefDelta:
+		// Pack-only: no object header names them.
 	}
+
 	return "unknown(" + strconv.Itoa(int(t)) + ")"
 }
 
@@ -74,6 +79,7 @@ type Format struct {
 	newHash func() hash.Hash
 }
 
+// The object formats git supports.
 var (
 	SHA1   = Format{Name: "sha1", Size: sha1.Size, newHash: sha1.New}
 	SHA256 = Format{Name: "sha256", Size: sha256.Size, newHash: sha256.New}
@@ -81,12 +87,17 @@ var (
 
 // IDFromBytes makes an id from exactly f.Size raw bytes.
 func (f Format) IDFromBytes(b []byte) (ObjectID, error) {
-	if len(b) != f.Size {
-		return ObjectID{}, fmt.Errorf("%s id: %d bytes, want %d", f.Name, len(b), f.Size)
+	n := f.Size
+	if n < 0 || n > maxHashSize {
+		return ObjectID{}, fmt.Errorf("%s id: unsupported size %d", f.Name, n)
+	}
+	if len(b) != n {
+		return ObjectID{}, fmt.Errorf("%s id: %d bytes, want %d", f.Name, len(b), n)
 	}
 	var id ObjectID
 	copy(id.b[:], b)
-	id.n = uint8(f.Size)
+	id.n = uint8(n)
+
 	return id, nil
 }
 
@@ -99,6 +110,7 @@ func (f Format) ParseHex(s string) (ObjectID, error) {
 	if _, err := hex.Decode(buf[:f.Size], []byte(s)); err != nil {
 		return ObjectID{}, fmt.Errorf("%s id %q: %w", f.Name, s, err)
 	}
+
 	return f.IDFromBytes(buf[:f.Size])
 }
 
@@ -112,7 +124,8 @@ type ObjectHasher struct {
 // hashes "<type> <size>\x00" followed by the content.
 func (f Format) NewObjectHasher(t ObjectType, size int64) *ObjectHasher {
 	h := f.newHash()
-	fmt.Fprintf(h, "%s %d\x00", t, size)
+	_, _ = fmt.Fprintf(h, "%s %d\x00", t, size) // a hash.Hash never returns a write error
+
 	return &ObjectHasher{h: h, f: f}
 }
 
@@ -121,12 +134,14 @@ func (o *ObjectHasher) Write(p []byte) (int, error) { return o.h.Write(p) }
 // Sum returns the object id.
 func (o *ObjectHasher) Sum() ObjectID {
 	id, _ := o.f.IDFromBytes(o.h.Sum(nil))
+
 	return id
 }
 
 // HashObject returns the id of an object with the given type and content.
 func (f Format) HashObject(t ObjectType, data []byte) ObjectID {
 	h := f.NewObjectHasher(t, int64(len(data)))
-	h.Write(data)
+	_, _ = h.Write(data) // a hash.Hash never returns a write error
+
 	return h.Sum()
 }

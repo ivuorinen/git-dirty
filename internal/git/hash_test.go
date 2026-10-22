@@ -28,7 +28,7 @@ func TestHashObject_MatchesGit(t *testing.T) {
 	}
 }
 
-func TestObjectID_Basics(t *testing.T) {
+func TestObjectID_Zero(t *testing.T) {
 	var zero ObjectID
 	if !zero.IsZero() || zero.String() != "" {
 		t.Errorf("zero value: IsZero=%v String=%q", zero.IsZero(), zero.String())
@@ -37,6 +37,9 @@ func TestObjectID_Basics(t *testing.T) {
 	if err != nil || !allZero.IsZero() {
 		t.Errorf("all-zero id: %v %v", allZero, err)
 	}
+}
+
+func TestObjectID_Comparable(t *testing.T) {
 	a, _ := SHA1.ParseHex(strings.Repeat("ab", 20))
 	b, _ := SHA256.ParseHex(strings.Repeat("ab", 32))
 	if a == b {
@@ -46,6 +49,9 @@ func TestObjectID_Basics(t *testing.T) {
 	if !m[a] || m[b] {
 		t.Error("map lookup by id is wrong")
 	}
+}
+
+func TestObjectID_Malformed(t *testing.T) {
 	for _, bad := range []string{"", "abc", strings.Repeat("zz", 20), strings.Repeat("ab", 21)} {
 		if _, err := SHA1.ParseHex(bad); err == nil {
 			t.Errorf("ParseHex(%q): want error", bad)
@@ -57,6 +63,7 @@ func TestObjectID_Basics(t *testing.T) {
 }
 
 func TestCheckFormat(t *testing.T) {
+	const objectFormat = "objectformat"
 	tests := []struct {
 		name    string
 		version string
@@ -66,11 +73,21 @@ func TestCheckFormat(t *testing.T) {
 	}{
 		{name: "default", want: SHA1},
 		{name: "v0 ignores extensions", version: "0", ext: map[string]string{"refstorage": "reftable"}, want: SHA1},
-		{name: "v1 sha256", version: "1", ext: map[string]string{"objectformat": "sha256"}, want: SHA256},
-		{name: "v1 sha1 explicit", version: "1", ext: map[string]string{"objectformat": "SHA1"}, want: SHA1},
-		{name: "v1 known extensions", version: "1", ext: map[string]string{"worktreeconfig": "true", "partialclone": "origin"}, want: SHA1},
-		{name: "reftable refused", version: "1", ext: map[string]string{"refstorage": "reftable"}, wantErr: `"refstorage"`},
-		{name: "unknown object format", version: "1", ext: map[string]string{"objectformat": "md5"}, wantErr: "md5"},
+		{name: "v1 sha256", version: "1", ext: map[string]string{objectFormat: "sha256"}, want: SHA256},
+		{name: "v1 sha1 explicit", version: "1", ext: map[string]string{objectFormat: "SHA1"}, want: SHA1},
+		{
+			name:    "v1 known extensions",
+			version: "1",
+			ext:     map[string]string{"worktreeconfig": "true", "partialclone": "origin"},
+			want:    SHA1,
+		},
+		{
+			name:    "reftable refused",
+			version: "1",
+			ext:     map[string]string{"refstorage": "reftable"},
+			wantErr: `"refstorage"`,
+		},
+		{name: "unknown object format", version: "1", ext: map[string]string{objectFormat: "md5"}, wantErr: "md5"},
 		{name: "version 2", version: "2", wantErr: "version"},
 	}
 	for _, tt := range tests {
@@ -80,6 +97,7 @@ func TestCheckFormat(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want %q", err, tt.wantErr)
 				}
+
 				return
 			}
 			if err != nil || got.Name != tt.want.Name {

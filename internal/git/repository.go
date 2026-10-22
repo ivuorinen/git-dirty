@@ -30,13 +30,14 @@ func OpenWorktree(path string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return Open(gitDir)
 }
 
 // Open opens a git directory, following its commondir file if present.
 func Open(gitDir string) (*Repository, error) {
 	commonDir := gitDir
-	b, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	b, err := os.ReadFile(filepath.Clean(filepath.Join(gitDir, "commondir")))
 	switch {
 	case err == nil:
 		c := strings.TrimSpace(string(b))
@@ -60,6 +61,7 @@ func Open(gitDir string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &Repository{GitDir: gitDir, CommonDir: commonDir, Format: format, Config: cfg}, nil
 }
 
@@ -69,6 +71,7 @@ func (r *Repository) Close() error {
 	if r.odb == nil {
 		return nil
 	}
+
 	return r.odb.close()
 }
 
@@ -84,7 +87,7 @@ func findGitDir(worktree string) (string, error) {
 	if !fi.Mode().IsRegular() {
 		return "", fmt.Errorf("%s: neither a directory nor a gitdir file", p)
 	}
-	b, err := os.ReadFile(p)
+	b, err := os.ReadFile(filepath.Clean(p))
 	if err != nil {
 		return "", err
 	}
@@ -97,5 +100,6 @@ func findGitDir(worktree string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(worktree, dir)
 	}
+
 	return filepath.Clean(dir), nil
 }

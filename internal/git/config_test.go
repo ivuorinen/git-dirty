@@ -36,6 +36,18 @@ const configFixture = "\xef\xbb\xbf# leading comment\n" +
 	"[core]\n" +
 	"\tfileMode = true\n"
 
+// Sections of configFixture.
+const (
+	secCore = "core"
+	secEsc  = "esc"
+)
+
+// configKey names one key of configFixture for git and for Config.
+type configKey struct {
+	gitKey                   string
+	section, subsection, key string
+}
+
 // gitConfigGet returns git's values for key (NUL-separated output, so
 // whitespace and newlines inside values survive).
 func gitConfigGet(t *testing.T, file, key string, all bool) ([]string, bool) {
@@ -44,11 +56,13 @@ func gitConfigGet(t *testing.T, file, key string, all bool) ([]string, bool) {
 	if all {
 		args[4] = "--get-all"
 	}
-	out, err := exec.Command("git", args...).Output()
+	// runCode trims the output, which would hide whitespace bugs.
+	out, err := exec.Command("git", args...).Output() //nolint:gosec // G204: git is the test oracle
 	if err != nil {
 		return nil, false
 	}
 	vals := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+
 	return vals, true
 }
 
@@ -60,52 +74,72 @@ func gitAtLeast(t *testing.T, major, minor int) bool {
 	if _, err := fmt.Sscanf(v, "%d.%d", &ma, &mi); err != nil {
 		t.Fatalf("parse git version %q: %v", v, err)
 	}
+
 	return ma > major || ma == major && mi >= minor
+}
+
+// checkConfigGet compares Get for one key with git config --get.
+func checkConfigGet(t *testing.T, cfg *Config, file string, k configKey) {
+	t.Helper()
+	if k.gitKey == "esc.inner" && !gitAtLeast(t, 2, 45) {
+		t.Logf("skipping %s: git before 2.45 turns each whitespace character into a space", k.gitKey)
+
+		return
+	}
+	want, ok := gitConfigGet(t, file, k.gitKey, false)
+	if !ok {
+		t.Fatalf("git has no %s", k.gitKey)
+	}
+	got, ok := cfg.Get(k.section, k.subsection, k.key)
+	if !ok || got != want[0] {
+		t.Errorf("%s = %q (found %v), git says %q", k.gitKey, got, ok, want[0])
+	}
+}
+
+// checkConfigBool checks Bool on configFixture's boolean keys.
+func checkConfigBool(t *testing.T, cfg *Config) {
+	t.Helper()
+	if !cfg.Bool(secCore, "", "bare", false) || !cfg.Bool(secCore, "", "filemode", false) ||
+		!cfg.Bool(secCore, "", "ignorecase", false) {
+		t.Error("Bool: bare key, last-wins, or TRUE parsed wrong")
+	}
+	if cfg.Bool(secEsc, "", "empty", true) {
+		t.Error(`Bool: "key =" (empty) should be false, as in git`)
+	}
+	if !cfg.Bool(secCore, "", "missing", true) {
+		t.Error("Bool: absent key should give the default")
+	}
 }
 
 func TestParseConfig_MatchesGit(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "config")
-	if err := os.WriteFile(file, []byte(configFixture), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte(configFixture), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := ReadConfigFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys := []struct {
-		gitKey                   string
-		section, subsection, key string
-	}{
-		{"core.filemode", "core", "", "filemode"},
+	keys := []configKey{
+		{"core.filemode", secCore, "", "filemode"},
 		{"CORE.FileMode", "CORE", "", "FileMode"},
-		{"core.bare", "core", "", "bare"},
-		{"core.ignorecase", "core", "", "ignorecase"},
-		{"core.excludesfile", "core", "", "excludesFile"},
+		{"core.bare", secCore, "", "bare"},
+		{"core.ignorecase", secCore, "", "ignorecase"},
+		{"core.excludesfile", secCore, "", "excludesFile"},
 		{"remote.Origin.url", "remote", "Origin", "url"},
 		{"branch.feat/x \"q\".remote", "branch", "feat/x \"q\"", "remote"},
 		{"branch.feat/x \"q\".merge", "branch", "feat/x \"q\"", "merge"},
 		{"section.legacy.key", "section", "legacy", "key"},
-		{"esc.tabs", "esc", "", "tabs"},
-		{"esc.cont", "esc", "", "cont"},
-		{"esc.inner", "esc", "", "inner"},
-		{"esc.mixed", "esc", "", "mixed"},
-		{"esc.crlf", "esc", "", "crlf"},
-		{"esc.empty", "esc", "", "empty"},
-		{"esc.semi", "esc", "", "semi"},
+		{"esc.tabs", secEsc, "", "tabs"},
+		{"esc.cont", secEsc, "", "cont"},
+		{"esc.inner", secEsc, "", "inner"},
+		{"esc.mixed", secEsc, "", "mixed"},
+		{"esc.crlf", secEsc, "", "crlf"},
+		{"esc.empty", secEsc, "", "empty"},
+		{"esc.semi", secEsc, "", "semi"},
 	}
 	for _, k := range keys {
-		if k.gitKey == "esc.inner" && !gitAtLeast(t, 2, 45) {
-			t.Logf("skipping %s: git before 2.45 turns each whitespace character into a space", k.gitKey)
-			continue
-		}
-		want, ok := gitConfigGet(t, file, k.gitKey, false)
-		if !ok {
-			t.Fatalf("git has no %s", k.gitKey)
-		}
-		got, ok := cfg.Get(k.section, k.subsection, k.key)
-		if !ok || got != want[0] {
-			t.Errorf("%s = %q (found %v), git says %q", k.gitKey, got, ok, want[0])
-		}
+		checkConfigGet(t, cfg, file, k)
 	}
 	want, _ := gitConfigGet(t, file, "remote.Origin.fetch", true)
 	if got := cfg.GetAll("remote", "Origin", "fetch"); strings.Join(got, "|") != strings.Join(want, "|") {
@@ -114,15 +148,7 @@ func TestParseConfig_MatchesGit(t *testing.T) {
 	if _, ok := cfg.Get("remote", "origin", "url"); ok {
 		t.Error("subsection lookup is case-insensitive; git's is not")
 	}
-	if !cfg.Bool("core", "", "bare", false) || !cfg.Bool("core", "", "filemode", false) || !cfg.Bool("core", "", "ignorecase", false) {
-		t.Error("Bool: bare key, last-wins, or TRUE parsed wrong")
-	}
-	if cfg.Bool("esc", "", "empty", true) {
-		t.Error(`Bool: "key =" (empty) should be false, as in git`)
-	}
-	if !cfg.Bool("core", "", "missing", true) {
-		t.Error("Bool: absent key should give the default")
-	}
+	checkConfigBool(t, cfg)
 }
 
 func TestParseConfig_Errors(t *testing.T) {
@@ -141,10 +167,10 @@ func TestParseConfig_Errors(t *testing.T) {
 				t.Errorf("err = %v, want a bad config line error", err)
 			}
 			file := filepath.Join(dir, strings.ReplaceAll(name, " ", "-"))
-			if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+			if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command("git", "config", "--file", file, "--list").CombinedOutput(); err == nil {
+			if out, code := runCode(t, "", nil, "config", "--file", file, "--list"); code == 0 {
 				t.Errorf("git accepted the fixture, so the test is wrong: %s", out)
 			}
 		})
@@ -156,7 +182,7 @@ func TestReadConfigFile_Missing(t *testing.T) {
 	if err != nil || cfg == nil {
 		t.Fatalf("missing file: %v, %v", cfg, err)
 	}
-	if _, ok := cfg.Get("core", "", "bare"); ok {
+	if _, ok := cfg.Get(secCore, "", "bare"); ok {
 		t.Error("empty config has a key")
 	}
 }

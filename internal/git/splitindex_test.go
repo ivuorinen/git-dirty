@@ -2,6 +2,7 @@ package git
 
 import (
 	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,7 +14,7 @@ import (
 // link extension git wrote.
 func rawLink(t *testing.T, dir string, f Format) *indexLink {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, ".git", "index"))
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(dir, ".git", "index")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,6 +22,7 @@ func rawLink(t *testing.T, dir string, f Format) *indexLink {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return idx.link
 }
 
@@ -57,12 +59,20 @@ func TestReadIndex_SplitIndex(t *testing.T) {
 }
 
 // ewah serializes words with git's EWAH layout, for unit tests.
-func ewah(bitSize uint32, words ...uint64) []byte {
+func ewah(tb testing.TB, bitSize uint32, words ...uint64) []byte {
+	tb.Helper()
+	n := len(words)
+	if n < 0 || n > math.MaxUint32 {
+		tb.Fatalf("%d words do not fit the word count", n)
+
+		return nil
+	}
 	b := binary.BigEndian.AppendUint32(nil, bitSize)
-	b = binary.BigEndian.AppendUint32(b, uint32(len(words)))
+	b = binary.BigEndian.AppendUint32(b, uint32(n))
 	for _, w := range words {
 		b = binary.BigEndian.AppendUint64(b, w)
 	}
+
 	return binary.BigEndian.AppendUint32(b, 0)
 }
 
@@ -72,12 +82,13 @@ func rlw(runBit bool, runLen, literals uint64) uint64 {
 	if runBit {
 		w |= 1
 	}
+
 	return w
 }
 
 func TestDecodeEWAH(t *testing.T) {
 	t.Run("run of ones then a literal", func(t *testing.T) {
-		data := ewah(70, rlw(true, 1, 1), 0b101)
+		data := ewah(t, 70, rlw(true, 1, 1), 0b101)
 		bits, n, err := decodeEWAH(data)
 		if err != nil || n != len(data) {
 			t.Fatalf("err = %v, consumed %d of %d", err, n, len(data))
@@ -92,18 +103,18 @@ func TestDecodeEWAH(t *testing.T) {
 		}
 	})
 	t.Run("zero run is skipped", func(t *testing.T) {
-		bits, _, err := decodeEWAH(ewah(200, rlw(false, 2, 1), 1<<3))
+		bits, _, err := decodeEWAH(ewah(t, 200, rlw(false, 2, 1), 1<<3))
 		if err != nil || !slices.Equal(bits, []int{131}) {
 			t.Errorf("bits = %v, err = %v", bits, err)
 		}
 	})
 	bad := map[string][]byte{
 		"truncated header":   {0, 0, 0, 1},
-		"words beyond data":  append(ewah(64, rlw(false, 0, 1))[:8], 0, 0, 0, 0),
-		"literal count lies": ewah(640, rlw(false, 0, 5), 1),
-		"bit beyond size":    ewah(10, rlw(false, 0, 1), 1<<20),
-		"run beyond size":    ewah(10, rlw(true, 1, 0)),
-		"size too large":     ewah(maxEWAHBits+1, rlw(false, 0, 0)),
+		"words beyond data":  append(ewah(t, 64, rlw(false, 0, 1))[:8], 0, 0, 0, 0),
+		"literal count lies": ewah(t, 640, rlw(false, 0, 5), 1),
+		"bit beyond size":    ewah(t, 10, rlw(false, 0, 1), 1<<20),
+		"run beyond size":    ewah(t, 10, rlw(true, 1, 0)),
+		"size too large":     ewah(t, maxEWAHBits+1, rlw(false, 0, 0)),
 	}
 	for name, data := range bad {
 		if _, _, err := decodeEWAH(data); err == nil {

@@ -57,7 +57,7 @@ const (
 // ReadIndex reads this worktree's index. A missing file is an empty index.
 func (r *Repository) ReadIndex() (*Index, error) {
 	path := filepath.Join(r.GitDir, "index")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if errors.Is(err, fs.ErrNotExist) {
 		return &Index{Version: 2}, nil
 	}
@@ -78,6 +78,7 @@ func (r *Repository) ReadIndex() (*Index, error) {
 			return nil, err
 		}
 	}
+
 	return idx, nil
 }
 
@@ -93,7 +94,7 @@ func DecodeIndex(data []byte, f Format) (*Index, error) {
 	}
 	count := binary.BigEndian.Uint32(data[8:12])
 	end := len(data) - f.Size // start of the trailing checksum
-	if uint64(count) > uint64(end)/minIndexEntrySize {
+	if int64(count) > int64(end/minIndexEntrySize) {
 		return nil, fmt.Errorf("entry count %d exceeds the file size", count)
 	}
 	idx.Entries = make([]IndexEntry, 0, count)
@@ -108,6 +109,7 @@ func DecodeIndex(data []byte, f Format) (*Index, error) {
 	if err := d.extensions(idx); err != nil {
 		return nil, err
 	}
+
 	return idx, nil
 }
 
@@ -123,19 +125,41 @@ func (d *indexDecoder) need(n int) error {
 	if n < 0 || d.pos+n > len(d.data) {
 		return fmt.Errorf("index truncated at byte %d", d.pos)
 	}
+
 	return nil
 }
 
 func (d *indexDecoder) u32() uint32 {
 	v := binary.BigEndian.Uint32(d.data[d.pos:])
 	d.pos += 4
+
 	return v
 }
 
 func (d *indexDecoder) entry() (IndexEntry, error) {
 	start := d.pos
-	if err := d.need(statFieldsSize + d.f.Size + 2); err != nil {
+	e, flags, err := d.entryFields()
+	if err != nil {
 		return IndexEntry{}, err
+	}
+	if d.version == 4 {
+		e.Name, err = d.compressedName()
+	} else {
+		e.Name, err = d.paddedName(start, flags)
+	}
+	if err != nil {
+		return IndexEntry{}, err
+	}
+
+	return e, nil
+}
+
+// entryFields reads an entry's fixed part: stat data, id, flags and, in
+// version 3 and later, the extended flags. It returns the flags for the
+// name that follows.
+func (d *indexDecoder) entryFields() (IndexEntry, uint16, error) {
+	if err := d.need(statFieldsSize + d.f.Size + 2); err != nil {
+		return IndexEntry{}, 0, err
 	}
 	var e IndexEntry
 	cs, cn := d.u32(), d.u32()
@@ -151,59 +175,68 @@ func (d *indexDecoder) entry() (IndexEntry, error) {
 	e.Stage = int(flags&flagStageMask) >> 12
 	if flags&flagExtended != 0 {
 		if d.version < 3 {
-			return IndexEntry{}, errors.New("extended flags in a version 2 index")
+			return IndexEntry{}, 0, errors.New("extended flags in a version 2 index")
 		}
 		if err := d.need(2); err != nil {
-			return IndexEntry{}, err
+			return IndexEntry{}, 0, err
 		}
 		ext := binary.BigEndian.Uint16(d.data[d.pos:])
 		d.pos += 2
 		e.SkipWorktree = ext&extSkipWorktree != 0
 		e.IntentToAdd = ext&extIntentToAdd != 0
 	}
-	fixed := d.pos - start
 
-	if d.version == 4 {
-		strip, err := d.varint()
-		if err != nil {
-			return IndexEntry{}, err
-		}
-		if strip > uint64(len(d.prevName)) {
-			return IndexEntry{}, fmt.Errorf("index v4 entry strips %d of %d bytes", strip, len(d.prevName))
-		}
-		nul := bytes.IndexByte(d.data[d.pos:], 0)
-		if nul < 0 {
-			return IndexEntry{}, errors.New("index v4 entry name not terminated")
-		}
-		name := append(d.prevName[:len(d.prevName)-int(strip):len(d.prevName)-int(strip)], d.data[d.pos:d.pos+nul]...)
-		d.pos += nul + 1
-		d.prevName = name
-		e.Name = string(name)
-		return e, nil
+	return e, flags, nil
+}
+
+// compressedName reads a version 4 name: how many bytes to strip from the
+// previous name, then the NUL-terminated suffix to append.
+func (d *indexDecoder) compressedName() (string, error) {
+	strip, err := d.varint()
+	if err != nil {
+		return "", err
 	}
+	if strip > uint64(len(d.prevName)) {
+		return "", fmt.Errorf("index v4 entry strips %d of %d bytes", strip, len(d.prevName))
+	}
+	nul := bytes.IndexByte(d.data[d.pos:], 0)
+	if nul < 0 {
+		return "", errors.New("index v4 entry name not terminated")
+	}
+	keep := uint64(len(d.prevName)) - strip
+	d.prevName = append(d.prevName[:keep:keep], d.data[d.pos:d.pos+nul]...)
+	d.pos += nul + 1
 
+	return string(d.prevName), nil
+}
+
+// paddedName reads a version 2 or 3 name: its length is in flags unless it
+// is too long for them, and the entry is NUL-padded to a multiple of 8 bytes
+// counted from start.
+func (d *indexDecoder) paddedName(start int, flags uint16) (string, error) {
+	fixed := d.pos - start
 	nameLen := int(flags & flagNameMask)
 	if nameLen == flagNameMask { // long name: read up to the NUL
 		nul := bytes.IndexByte(d.data[d.pos:], 0)
 		if nul < 0 {
-			return IndexEntry{}, errors.New("index entry name not terminated")
+			return "", errors.New("index entry name not terminated")
 		}
 		nameLen = nul
 	}
 	if err := d.need(nameLen + 1); err != nil {
-		return IndexEntry{}, err
+		return "", err
 	}
 	if d.data[d.pos+nameLen] != 0 {
-		return IndexEntry{}, errors.New("index entry name length mismatch")
+		return "", errors.New("index entry name length mismatch")
 	}
-	e.Name = string(d.data[d.pos : d.pos+nameLen])
-	// Entries are NUL-padded to a multiple of 8 bytes.
+	name := string(d.data[d.pos : d.pos+nameLen])
 	next := start + (fixed+nameLen+8)&^7
 	if next > len(d.data) {
-		return IndexEntry{}, fmt.Errorf("index truncated at byte %d", d.pos)
+		return "", fmt.Errorf("index truncated at byte %d", d.pos)
 	}
 	d.pos = next
-	return e, nil
+
+	return name, nil
 }
 
 // varint decodes git's offset varint (index v4 strip count): each
@@ -259,6 +292,7 @@ func (d *indexDecoder) extensions(idx *Index) error {
 			return fmt.Errorf("unsupported index extension %q", sig)
 		}
 	}
+
 	return nil
 }
 
@@ -290,5 +324,6 @@ func parseRootCacheTree(b []byte, f Format) (*CacheTree, error) {
 		}
 		t.ID, _ = f.IDFromBytes(rest[:f.Size])
 	}
+
 	return t, nil
 }

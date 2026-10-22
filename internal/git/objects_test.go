@@ -13,6 +13,7 @@ func hashObject(t *testing.T, dir, typ, content string) string {
 	if code != 0 {
 		t.Fatalf("hash-object: %s", out)
 	}
+
 	return out
 }
 
@@ -26,7 +27,7 @@ func checkCommit(t *testing.T, dir string, r *Repository, rev string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var parents []string
+	parents := make([]string, 0, len(c.Parents))
 	for _, p := range c.Parents {
 		parents = append(parents, p.String())
 	}
@@ -52,7 +53,7 @@ func TestParseCommit_MatchesGit(t *testing.T) {
 			}
 
 			tree := run(t, dir, "rev-parse", "HEAD^{tree}")
-			parent := run(t, dir, "rev-parse", "HEAD")
+			parent := run(t, dir, "rev-parse", headRef)
 			signed := "tree " + tree + "\nparent " + parent +
 				"\nauthor A U Thor <a@example.invalid> 1700000000 +0200" +
 				"\ncommitter C O Mitter <c@example.invalid> 1700000123 -0130" +
@@ -65,7 +66,7 @@ func TestParseCommit_MatchesGit(t *testing.T) {
 			}
 
 			r := openRepo(t, dir)
-			for _, rev := range []string{"HEAD", "HEAD^1", "b2", signedID} {
+			for _, rev := range []string{headRef, "HEAD^1", "b2", signedID} {
 				checkCommit(t, dir, r, rev)
 			}
 		})
@@ -77,19 +78,20 @@ func TestWalkTree_MatchesLsTree(t *testing.T) {
 		t.Run(f.Name, func(t *testing.T) {
 			dir := indexFixture(t, f)
 			r := openRepo(t, dir)
-			c, err := r.ReadCommit(mustParse(t, r, run(t, dir, "rev-parse", "HEAD")))
+			c, err := r.ReadCommit(mustParse(t, r, run(t, dir, "rev-parse", headRef)))
 			if err != nil {
 				t.Fatal(err)
 			}
 			var got []string
 			err = r.WalkTree(c.Tree, func(path string, e TreeEntry) error {
 				got = append(got, fmt.Sprintf("%06o %s\t%s", e.Mode, e.ID, path))
+
 				return nil
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := run(t, dir, "ls-tree", "-r", "--format=%(objectmode) %(objectname)%x09%(path)", "HEAD")
+			want := run(t, dir, "ls-tree", "-r", "--format=%(objectmode) %(objectname)%x09%(path)", headRef)
 			if strings.Join(got, "\n") != want {
 				t.Errorf("WalkTree:\n%s\ngit ls-tree -r:\n%s", strings.Join(got, "\n"), want)
 			}
@@ -103,6 +105,7 @@ func mustParse(t *testing.T, r *Repository, hex string) ObjectID {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return id
 }
 

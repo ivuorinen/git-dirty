@@ -1,10 +1,12 @@
 package git
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -24,7 +26,10 @@ type configEntry struct {
 
 // ReadConfigFile parses the file at path; a missing file is an empty config.
 func ReadConfigFile(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	// Open passes the config under the repository's commondir, a path read
+	// from the repository; git reads the shared config there too.
+	//nolint:gosec // G703: following commondir to the shared config is git's own behavior
+	data, err := os.ReadFile(filepath.Clean(path))
 	if errors.Is(err, fs.ErrNotExist) {
 		return &Config{}, nil
 	}
@@ -35,6 +40,7 @@ func ReadConfigFile(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+
 	return c, nil
 }
 
@@ -46,6 +52,7 @@ func (c *Config) Get(section, subsection, key string) (value string, ok bool) {
 			return e.value, true
 		}
 	}
+
 	return "", false
 }
 
@@ -57,6 +64,7 @@ func (c *Config) GetAll(section, subsection, key string) []string {
 			out = append(out, e.value)
 		}
 	}
+
 	return out
 }
 
@@ -77,8 +85,10 @@ func (c *Config) Bool(section, subsection, key string, def bool) bool {
 		case "false", "no", "off", "0", "":
 			return false
 		}
+
 		return def
 	}
+
 	return def
 }
 
@@ -92,6 +102,7 @@ func (c *Config) Keys(section, subsection string) []string {
 			out = append(out, e.key)
 		}
 	}
+
 	return out
 }
 
@@ -99,13 +110,16 @@ func (e configEntry) matches(section, subsection, key string) bool {
 	return e.section == strings.ToLower(section) && e.subsection == subsection && e.key == strings.ToLower(key)
 }
 
+// utf8BOM is skipped at the start of a config file, as git does.
+const utf8BOM = "\xef\xbb\xbf"
+
 // ParseConfig parses git config syntax: [section] and [section "sub"]
 // headers, key = value lines, quoting, the \n \t \b \\ \" escapes,
 // backslash-newline continuation and ; or # comments.
 func ParseConfig(data []byte) (*Config, error) {
 	p := configParser{data: data, line: 1}
-	if len(data) >= 3 && string(data[:3]) == "\xef\xbb\xbf" {
-		p.pos = 3
+	if bytes.HasPrefix(data, []byte(utf8BOM)) {
+		p.pos = len(utf8BOM)
 	}
 	c := &Config{}
 	// Keys before any header belong to the empty section, as in git.
@@ -115,18 +129,14 @@ func ParseConfig(data []byte) (*Config, error) {
 		switch {
 		case !ok:
 			return c, nil
-		case ch == '\n':
-			continue
-		case ch == ' ' || ch == '\t':
-			continue
-		case ch == '#' || ch == ';':
-			p.skipLine()
+		case p.skipBlank(ch):
 			continue
 		case ch == '[':
 			var err error
 			if section, subsection, err = p.header(); err != nil {
 				return nil, err
 			}
+
 			continue
 		case !isAlpha(ch):
 			return nil, p.errorf("unexpected character %q", ch)
@@ -161,6 +171,7 @@ func (p *configParser) next() (byte, bool) {
 	if c == '\n' {
 		p.line++
 	}
+
 	return c, true
 }
 
@@ -168,6 +179,7 @@ func (p *configParser) peek() (byte, bool) {
 	if p.pos >= len(p.data) {
 		return 0, false
 	}
+
 	return p.data[p.pos], true
 }
 
@@ -177,6 +189,32 @@ func (p *configParser) skipLine() {
 		if !ok || c == '\n' {
 			return
 		}
+	}
+}
+
+// skipBlank reports whether c, read between entries, starts nothing: a line
+// end, a blank, or a comment, whose rest it consumes.
+func (p *configParser) skipBlank(c byte) bool {
+	switch c {
+	case '\n', ' ', '\t':
+		return true
+	case '#', ';':
+		p.skipLine()
+
+		return true
+	}
+
+	return false
+}
+
+// skipSpaces consumes blanks without leaving the line.
+func (p *configParser) skipSpaces() {
+	for {
+		c, ok := p.peek()
+		if !ok || (c != ' ' && c != '\t') {
+			return
+		}
+		p.pos++
 	}
 }
 
@@ -193,21 +231,15 @@ func (p *configParser) header() (section, subsection string, err error) {
 		case !ok || c == '\n':
 			return "", "", p.errorf("unterminated section header")
 		case c == ']':
-			if name.Len() == 0 {
-				return "", "", p.errorf("empty section name")
-			}
-			n := strings.ToLower(name.String())
-			if s, sub, dotted := strings.Cut(n, "."); dotted {
-				return s, sub, nil // legacy [section.subsection]
-			}
-			return n, "", nil
+			return p.closeHeader(name.String())
 		case c == ' ' || c == '\t':
 			if name.Len() == 0 {
 				return "", "", p.errorf("empty section name")
 			}
 			sub, err := p.subsection()
+
 			return strings.ToLower(name.String()), sub, err
-		case isAlnum(c) || c == '-' || c == '.':
+		case isSectionChar(c):
 			name.WriteByte(c)
 		default:
 			return "", "", p.errorf("invalid character %q in section name", c)
@@ -215,21 +247,58 @@ func (p *configParser) header() (section, subsection string, err error) {
 	}
 }
 
+// closeHeader returns the section of a header without a quoted subsection,
+// splitting the legacy [section.subsection] form.
+func (p *configParser) closeHeader(name string) (section, subsection string, err error) {
+	if name == "" {
+		return "", "", p.errorf("empty section name")
+	}
+	n := strings.ToLower(name)
+	if s, sub, dotted := strings.Cut(n, "."); dotted {
+		return s, sub, nil // legacy [section.subsection]
+	}
+
+	return n, "", nil
+}
+
 // subsection parses ` "name"]` after the section name.
 func (p *configParser) subsection() (string, error) {
+	if err := p.subsectionQuote(); err != nil {
+		return "", err
+	}
+	sub, err := p.subsectionName()
+	if err != nil {
+		return "", err
+	}
+	if c, ok := p.next(); !ok || c != ']' {
+		return "", p.errorf("expected ] after the subsection name")
+	}
+
+	return sub, nil
+}
+
+// subsectionQuote skips blanks up to and including the subsection's opening
+// quote.
+func (p *configParser) subsectionQuote() error {
 	for {
 		c, ok := p.next()
 		if !ok || c == '\n' {
-			return "", p.errorf("unterminated section header")
+			return p.errorf("unterminated section header")
 		}
 		if c == ' ' || c == '\t' {
 			continue
 		}
 		if c != '"' {
-			return "", p.errorf("expected a quoted subsection name")
+			return p.errorf("expected a quoted subsection name")
 		}
-		break
+
+		return nil
 	}
+}
+
+// subsectionName reads a quoted subsection name up to and including its
+// closing quote; a backslash takes the next byte literally.
+func (p *configParser) subsectionName() (string, error) {
 	var sub strings.Builder
 	for {
 		c, ok := p.next()
@@ -237,7 +306,7 @@ func (p *configParser) subsection() (string, error) {
 			return "", p.errorf("unterminated subsection name")
 		}
 		if c == '"' {
-			break
+			return sub.String(), nil
 		}
 		if c == '\\' {
 			if c, ok = p.next(); !ok || c == '\n' {
@@ -246,44 +315,41 @@ func (p *configParser) subsection() (string, error) {
 		}
 		sub.WriteByte(c)
 	}
-	if c, ok := p.next(); !ok || c != ']' {
-		return "", p.errorf("expected ] after the subsection name")
-	}
-	return sub.String(), nil
 }
 
 // variable parses a key starting with first, and its value if any.
 func (p *configParser) variable(first byte) (key string, noValue bool, value string, err error) {
+	name := p.keyName(first)
+	p.skipSpaces()
+	c, ok := p.next()
+	switch {
+	case !ok || c == '\n':
+		return name, true, "", nil
+	case c == '#' || c == ';':
+		p.skipLine()
+
+		return name, true, "", nil
+	case c == '=':
+		v, err := p.value()
+
+		return name, false, v, err
+	}
+
+	return "", false, "", p.errorf("unexpected character %q after key %q", c, name)
+}
+
+// keyName reads the rest of a key name starting with first, lowercased.
+func (p *configParser) keyName(first byte) string {
 	var name strings.Builder
 	name.WriteByte(toLower(first))
 	for {
 		c, ok := p.peek()
-		if !ok || !(isAlnum(c) || c == '-') {
-			break
+		if !ok || (!isAlnum(c) && c != '-') {
+			return name.String()
 		}
 		p.pos++
 		name.WriteByte(toLower(c))
 	}
-	for {
-		c, ok := p.peek()
-		if ok && (c == ' ' || c == '\t') {
-			p.pos++
-			continue
-		}
-		break
-	}
-	c, ok := p.next()
-	switch {
-	case !ok || c == '\n':
-		return name.String(), true, "", nil
-	case c == '#' || c == ';':
-		p.skipLine()
-		return name.String(), true, "", nil
-	case c == '=':
-		v, err := p.value()
-		return name.String(), false, v, err
-	}
-	return "", false, "", p.errorf("unexpected character %q after key %q", c, name.String())
 }
 
 // value parses after "=" up to the end of the line, like git's parse_value
@@ -291,72 +357,113 @@ func (p *configParser) variable(first byte) (key string, noValue bool, value str
 // start of the value and before its end or a comment. (Older git turned each
 // whitespace character into a space.)
 func (p *configParser) value() (string, error) {
-	var b strings.Builder
-	quote, comment := false, false
-	trim := -1 // length to cut back to if only whitespace follows
+	v := configValue{trim: -1}
 	for {
 		c, ok := p.next()
 		if !ok || c == '\n' {
-			if quote {
-				return "", p.errorf("unterminated quoted value")
-			}
-			s := b.String()
-			if trim >= 0 {
-				s = s[:trim]
-			}
-			return s, nil
+			return v.end(p)
 		}
-		if comment {
-			continue
-		}
-		if !quote && isSpace(c) {
-			if trim < 0 {
-				trim = b.Len()
-			}
-			if b.Len() > 0 {
-				b.WriteByte(c)
-			}
-			continue
-		}
-		if !quote && (c == ';' || c == '#') {
-			comment = true
-			continue
-		}
-		trim = -1
-		switch c {
-		case '\\':
-			e, ok := p.next()
-			switch {
-			case !ok:
-				return "", p.errorf("unterminated escape")
-			case e == '\n':
-				continue // line continuation
-			case e == 't':
-				b.WriteByte('\t')
-			case e == 'b':
-				b.WriteByte('\b')
-			case e == 'n':
-				b.WriteByte('\n')
-			case e == '\\' || e == '"':
-				b.WriteByte(e)
-			default:
-				return "", p.errorf("invalid escape \\%c", e)
-			}
-		case '"':
-			quote = !quote
-		default:
-			b.WriteByte(c)
+		if err := v.add(p, c); err != nil {
+			return "", err
 		}
 	}
+}
+
+// escape reads the byte after a backslash in a value and writes what it
+// stands for; a backslash-newline continues the value on the next line.
+func (p *configParser) escape(b *strings.Builder) error {
+	e, ok := p.next()
+	switch {
+	case !ok:
+		return p.errorf("unterminated escape")
+	case e == '\n':
+		// line continuation
+	case e == 't':
+		b.WriteByte('\t')
+	case e == 'b':
+		b.WriteByte('\b')
+	case e == 'n':
+		b.WriteByte('\n')
+	case e == '\\' || e == '"':
+		b.WriteByte(e)
+	default:
+		return p.errorf("invalid escape \\%c", e)
+	}
+
+	return nil
+}
+
+// configValue accumulates a value as configParser.value reads it.
+type configValue struct {
+	b       strings.Builder
+	quote   bool // inside double quotes
+	comment bool // past an unquoted ; or #
+	trim    int  // length to cut back to if only whitespace follows
+}
+
+// add takes one byte of the value's line.
+func (v *configValue) add(p *configParser, c byte) error {
+	switch {
+	case v.comment:
+		return nil
+	case !v.quote && isSpace(c):
+		v.space(c)
+
+		return nil
+	case !v.quote && (c == ';' || c == '#'):
+		v.comment = true
+
+		return nil
+	}
+	v.trim = -1
+	switch c {
+	case '\\':
+		return p.escape(&v.b)
+	case '"':
+		v.quote = !v.quote
+	default:
+		v.b.WriteByte(c)
+	}
+
+	return nil
+}
+
+// space takes unquoted whitespace: dropped at the start of the value, kept
+// otherwise, and marked for trimming in case only whitespace follows.
+func (v *configValue) space(c byte) {
+	if v.trim < 0 {
+		v.trim = v.b.Len()
+	}
+	if v.b.Len() > 0 {
+		v.b.WriteByte(c)
+	}
+}
+
+// end finishes the value at the end of its line.
+func (v *configValue) end(p *configParser) (string, error) {
+	if v.quote {
+		return "", p.errorf("unterminated quoted value")
+	}
+	s := v.b.String()
+	if v.trim >= 0 {
+		s = s[:v.trim]
+	}
+
+	return s, nil
 }
 
 // isSpace is C's isspace, which parse_value uses; '\n' never reaches it.
 func isSpace(c byte) bool { return c == ' ' || c >= '\t' && c <= '\r' }
 func isAlpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 func isAlnum(c byte) bool { return isAlpha(c) || c >= '0' && c <= '9' }
+
+// isSectionChar reports a byte allowed in a section name.
+func isSectionChar(c byte) bool { return isAlnum(c) || c == '-' || c == '.' }
+
 func toLower(c byte) byte {
 	if c >= 'A' && c <= 'Z' {
 		return c + 'a' - 'A'
 	}
+
 	return c
 }
