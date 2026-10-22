@@ -1,0 +1,17 @@
+Checking repositories in: /home/u/Code
+Legend: ✅ Clean repo | ❌ Dirty repo | ⚠️ Directory / error
+Showing non-standard branches (hiding main master trunk)
+---------------------------------------------------------
+⚠️ /home/u/Code
+├── ✅ a\x1b[2Jb
+├── ✅ fresh
+├── ❌ gone [S$] (feat, upstream gone)
+├── ⚠️ ivuorinen
+│   ├── ⚠️ broken ! index: unknown extension
+│   ├── ✅ dotfiles ↓3
+│   ├── ❌ gh-history ↑1
+│   └── ❌ git-dirty [M?] (feature/tree ↑2) · main ↓4 · vs main ↑5 ↓1
+├── ✅ scratch (wip, no upstream) · vs main ↑0 ↓0
+└── ✅ tagged (v1.0)
+
+Found 9 git repositories in 0.21s
