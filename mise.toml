@@ -1,0 +1,121 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+
+# Go is not listed under [tools]: its version comes from the toolchain line in
+# go.mod, which stays the single source of truth (CI's release job reads the same file
+# through setup-go). Reading go.mod is off by default in mise, so it is enabled
+# here for go alone.
+[settings]
+idiomatic_version_file_enable_tools = ["go"]
+
+# Renovate's mise manager bumps these, so a version change is always a commit.
+#
+# The Go tools are built from source with the go.mod toolchain (the go:
+# backend), not fetched as prebuilt binaries: staticcheck must be built with at
+# least the Go version of the code it checks.
+# staticcheck's module version 0.8.2 is release 2026.2.2.
+[tools]
+"go:honnef.co/go/tools/cmd/staticcheck" = "0.8.2"
+"go:golang.org/x/vuln/cmd/govulncheck" = "1.9.0"
+gh = "2.102.0"
+goreleaser = "2.18.3"
+hyperfine = "2.0.0"
+
+[tasks.build]
+description = "Build for the current platform"
+run = 'go build -trimpath -ldflags "-s -w" -o git-dirty .'
+
+[tasks.test]
+description = "Run all tests"
+run = "go test ./..."
+
+[tasks.test-race]
+description = "Run tests with the race detector"
+run = "go test -race ./..."
+
+[tasks.test-cov]
+description = "Run tests with a coverage summary"
+run = "go test -cover ./..."
+
+# The gofmt check mirrors CI's, so a clean `mise run all` means a clean CI run.
+[tasks.lint]
+description = "gofmt check, go vet and staticcheck"
+run = '''
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "gofmt reported unformatted files:"
+  echo "$unformatted"
+  exit 1
+fi
+go vet ./...
+staticcheck ./...
+'''
+
+# Reachability-aware: only fails on vulnerabilities this code can actually
+# reach, unlike a plain dependency-version scan.
+[tasks.vuln]
+description = "Scan for reachable vulnerabilities with govulncheck"
+run = "govulncheck ./..."
+
+[tasks.build-all]
+description = "Cross-compile for common platforms into dist/"
+run = '''
+for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+  os=${target%/*}
+  arch=${target#*/}
+  ext=""
+  if [ "$os" = windows ]; then ext=.exe; fi
+  GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "dist/git-dirty-$os-$arch$ext" .
+done
+'''
+
+# Warm-cache comparison with the bash script it replaces, written to bench.md
+# (gitignored). hyperfine discards the commands' output, so terminal rendering
+# is not timed. BENCH_DIR overrides the scanned directory.
+[tasks.bench]
+description = "Benchmark against the bash script with hyperfine (warm cache)"
+depends = ["build"]
+run = '''
+dir=${BENCH_DIR:-$HOME/Code}
+old=$HOME/.local/bin/git-dirty.sh
+[ -x "$old" ] || old=$HOME/.local/bin/git-dirty
+hyperfine --warmup 3 --runs 5 --export-markdown bench.md \
+  -n "bash script" "$old $dir" \
+  -n "bash script -p" "$old -p $dir" \
+  -n "git-dirty" "./git-dirty --plain $dir"
+'''
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf git-dirty dist/"
+
+# --local keeps `mise upgrade` to this file; without it, it also rewrites the
+# global mise config. Go itself is not bumped here: its version is the go.mod
+# toolchain line, which Renovate moves.
+[tasks.update]
+description = "Update Go modules and mise tools to their latest versions"
+run = ["go get -u -t ./...", "go mod tidy", "mise upgrade --bump --local"]
+
+[tasks.release]
+description = "Tag and push a CalVer release (requires a clean main branch)"
+run = '''
+if ! gh extension list | grep -q calver; then
+  gh extension install ivuorinen/gh-calver
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "Error: working tree is not clean"
+  exit 1
+fi
+if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
+  echo "Error: not on main branch"
+  exit 1
+fi
+tag=$(gh calver next)
+echo "Releasing $tag..."
+git tag -a "$tag" -m "Release $tag"
+git push origin "$tag"
+echo "Tag $tag pushed. GitHub Actions will build and sign the release."
+'''
+
+[tasks.all]
+description = "Lint, race-enabled tests, vulnerability scan and build: the CI gates"
+depends = ["lint", "test-race", "vuln", "build"]

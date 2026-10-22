@@ -1,0 +1,33 @@
+# Binary
+/git-dirty
+
+# Release-time generated files
+THIRD_PARTY_NOTICES.txt
+
+# Benchmark output (mise run bench)
+bench.md
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Goreleaser
+dist/
+
+# Claude
+.claude/settings.local.json
+
+# mise lockfile, written locally when the global `lockfile` setting is on;
+# nothing in this repo or Renovate maintains it
+mise.lock
