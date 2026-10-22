@@ -9,16 +9,20 @@ idiomatic_version_file_enable_tools = ["go"]
 
 # Renovate's mise manager bumps these, so a version change is always a commit.
 #
-# The Go tools are built from source with the go.mod toolchain (the go:
-# backend), not fetched as prebuilt binaries: staticcheck must be built with at
-# least the Go version of the code it checks.
-# staticcheck's module version 0.8.2 is release 2026.2.2.
+# govulncheck is built from source with the go.mod toolchain (the go: backend).
+# golangci-lint is the prebuilt release: it must be built with at least the Go
+# version of the code it checks, so check `golangci-lint version` when go.mod's
+# toolchain moves ahead of it (2.15.0 is built with go1.27.0).
 [tools]
-"go:honnef.co/go/tools/cmd/staticcheck" = "0.8.2"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.9.0"
 gh = "2.102.0"
+golangci-lint = "2.15.0"
 goreleaser = "2.18.3"
 hyperfine = "2.0.0"
+# Reads the Claude Code hook's JSON input (lint:hook).
+jq = "1.8.2"
+# Runs the .pre-commit-config.yaml hooks.
+prek = "0.5.7"
 
 [tasks.build]
 description = "Build for the current platform"
@@ -36,19 +40,41 @@ run = "go test -race ./..."
 description = "Run tests with a coverage summary"
 run = "go test -cover ./..."
 
-# The gofmt check mirrors CI's, so a clean `mise run all` means a clean CI run.
+# .golangci.yml sets `fix: true`; the check overrides it, so CI fails on an
+# issue instead of fixing a checkout nobody commits.
 [tasks.lint]
-description = "gofmt check, go vet and staticcheck"
+description = "golangci-lint (linters and formatters) without fixing"
+run = "golangci-lint run --fix=false"
+
+[tasks."lint:fix"]
+description = "golangci-lint, applying the fixes it can"
+run = "golangci-lint run --fix"
+
+# The pre-commit hook, as golangci-lint's own hook does it: prek stashes
+# unstaged changes first, so the lines changed since HEAD are the staged ones.
+[tasks."lint:staged"]
+description = "golangci-lint --fix on the lines changed since HEAD (pre-commit)"
+run = "golangci-lint run --new-from-rev HEAD --fix"
+
+# The Claude Code PostToolUse hook (.claude/settings.json), which passes the
+# tool call as JSON on stdin. It lints the package of the edited file; exit
+# status 2 sends stderr back to Claude, so the remaining findings reach the
+# agent that made the edit.
+[tasks."lint:hook"]
+description = "golangci-lint --fix on the edited file's package, for the Claude Code hook"
 run = '''
-unformatted=$(gofmt -l .)
-if [ -n "$unformatted" ]; then
-  echo "gofmt reported unformatted files:"
-  echo "$unformatted"
-  exit 1
-fi
-go vet ./...
-staticcheck ./...
+file=$(jq -r '.tool_input.file_path // empty')
+[ -n "$file" ] || exit 0
+golangci-lint run --fix "$(dirname "$file")" >&2 || exit 2
 '''
+
+[tasks."lint:all"]
+description = "Run every pre-commit hook on every file (prek)"
+run = "prek run --all-files"
+
+[tasks."hooks:install"]
+description = "Install the prek pre-commit hook into .git/hooks"
+run = "prek install"
 
 # Reachability-aware: only fails on vulnerabilities this code can actually
 # reach, unlike a plain dependency-version scan.

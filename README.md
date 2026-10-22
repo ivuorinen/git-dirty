@@ -186,10 +186,13 @@ Ignore rules follow git's: `core.excludesFile` (default
 ## Development
 
 ```sh
-mise run all        # lint, race-enabled tests, govulncheck, build: the CI gates
+mise run all            # golangci-lint, race-enabled tests, govulncheck, build: the CI gates
 mise run test
-mise run bench      # hyperfine against the bash script (warm cache)
-scripts/compare.sh  # repository-by-repository comparison with the bash script
+mise run lint:fix       # golangci-lint with its fixes applied
+mise run hooks:install  # pre-commit hooks (prek): linters for Go, Markdown, YAML, workflows, shell
+mise run lint:all       # every pre-commit hook on every file
+mise run bench          # hyperfine against the bash script (warm cache)
+scripts/compare.sh      # repository-by-repository comparison with the bash script
 ```
 
 The tests build real repositories with the `git` binary and use git's own

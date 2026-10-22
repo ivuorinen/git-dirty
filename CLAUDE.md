@@ -18,7 +18,10 @@ mise install         # Go (go.mod toolchain line) and the pinned dev tools
 mise run build       # Build ./git-dirty
 mise run test        # Run the full test suite (needs git on PATH)
 mise run test-race   # Tests with the race detector
-mise run lint        # gofmt check + go vet + staticcheck
+mise run lint        # golangci-lint (.golangci.yml), no fixes: the CI check
+mise run lint:fix    # golangci-lint, applying its fixes
+mise run lint:all    # every pre-commit hook (prek) on every file
+mise run hooks:install  # install the prek pre-commit hook
 mise run vuln        # govulncheck
 mise run all         # lint + test-race + vuln + build (the CI gates)
 mise run bench       # hyperfine against the bash script
@@ -66,7 +69,7 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
 ## Rules that are easy to break
 
 - **internal/git imports the standard library only.** No module may be added
-  to read git data; `go list -deps . | grep go-git` must print nothing.
+  to read git data; depguard in `.golangci.yml` fails on any other import.
 - **Everything internal/git reads may come from a hostile clone.** Keep the
   limits: `maxObjectSize` (256 MiB), `maxDeltaDepth` (10,000), delta copy
   bounds, `maxEWAHBits`, `symrefMaxDepth` (5), `maxTagDepth` and
@@ -75,7 +78,14 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   returns an error and never panics; the fuzz targets in `fuzz_test.go` check
   that, and a new decoder gets a fuzz target.
 - **Never execute `git` or anything else at runtime.** No hooks, no filters, no
-  fsmonitor. Tests may call `git`, because they use it as the oracle.
+  fsmonitor. Tests may call `git`, because they use it as the oracle;
+  forbidigo rejects `exec.Command` outside `_test.go` files.
+- **golangci-lint findings are fixed, not suppressed.** `//nolint:<linter> //
+  <reason>` is only for code that is correct by design, such as `crypto/sha1`
+  for git's object IDs or the tests' `exec.Command("git", ...)`; nolintlint
+  checks every directive. A PostToolUse hook in `.claude/settings.json` runs
+  `mise run lint:hook` (golangci-lint `--fix` on the edited file's package)
+  after every `.go` edit and reports what is left.
 - **The git CLI is the test oracle.** Tests build fixtures with `git` and
   compare against `git diff --quiet`, `git diff --cached --quiet`,
   `git ls-files --others --exclude-standard`, `git rev-list --left-right --count`,

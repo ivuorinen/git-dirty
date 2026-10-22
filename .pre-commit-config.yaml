@@ -1,0 +1,74 @@
+---
+# Run by prek (pinned in mise.toml): `mise run hooks:install` once, then on
+# every commit; `mise run lint:all` runs every hook on every file.
+#
+# Golden files under testdata/ are compared byte for byte, so no fixer hook
+# may touch them.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: detect-private-key
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: (^|/)testdata/
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: end-of-file-fixer
+        exclude: (^|/)testdata/
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: (^|/)testdata/
+      - id: pretty-format-json
+        args: [--autofix, --no-sort-keys]
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.49.1
+    hooks:
+      - id: markdownlint
+        args: [-c, .markdownlint.json, --fix]
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.31.1
+    hooks:
+      - id: zizmor
+        args: [--persona=auditor]
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1-1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/editorconfig-checker/editorconfig-checker
+    rev: v4.0.2
+    hooks:
+      - id: editorconfig-checker
+
+  # golangci-lint comes from mise.toml, so the hook and `mise run lint` use
+  # the same version and .golangci.yml. Like golangci-lint's own hook, it
+  # checks only the lines changed since HEAD; `mise run lint` checks all.
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: mise run lint:staged
+        language: system
+        pass_filenames: false
+        require_serial: true
+        types: [go]

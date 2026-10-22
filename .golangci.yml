@@ -1,0 +1,132 @@
+---
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+version: "2"
+
+# golangci-lint configuration, from ivuorinen/gh-action-readme. The linters
+# and thresholds are unchanged; the forbidigo, depguard and goimports settings
+# encode this repository's rules instead of that one's.
+#
+# Aligned with SonarCloud "Sonar way" quality gate
+# https://docs.sonarsource.com/sonarqube-cloud/standards/managing-quality-gates/
+#
+# Key alignments:
+# - gosec: Aligns with Security Rating A requirement (no vulnerabilities)
+# - gocyclo (min: 10): Stricter than SonarCloud (not enforced)
+# - dupl: Aligns with duplicated lines density <= 3%
+# - lll (120 chars): Stricter than SonarCloud (not enforced)
+#
+# SonarCloud focuses on new code (last 30 days), local linting checks entire codebase
+# Local standards are intentionally stricter in some areas (complexity, line length)
+
+run:
+  timeout: 5m
+  go: "1.27"
+
+linters:
+  default: standard
+
+  enable:
+    # Additional linters beyond standard
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - contextcheck
+    - depguard
+    - dupl
+    - errname
+    - exhaustive
+    - forbidigo
+    - forcetypeassert
+    - funcorder
+    - goconst
+    - gocritic
+    - gocyclo
+    - godot
+    - godox
+    - goheader
+    - gosec
+    - iface
+    - importas
+    - lll
+    - maintidx
+    - misspell
+    - nilerr
+    - nlreturn
+    - nolintlint
+    - perfsprint
+    - prealloc
+    - predeclared
+    - reassign
+    - revive
+    - tagalign
+    - testableexamples
+    - thelper
+    - usestdlibvars
+    - usetesting
+
+  disable:
+    # Disable noisy linters
+    - funlen
+    - wsl
+    - wrapcheck
+
+  settings:
+    lll:
+      line-length: 120
+    misspell:
+      locale: US
+    gocyclo:
+      min-complexity: 10
+    goconst:
+      min-len: 2
+      min-occurrences: 3
+    # CLAUDE.md: git-dirty never executes git or anything else at runtime.
+    # Tests may, since the git CLI is their oracle (exempted below).
+    forbidigo:
+      forbid:
+        - pattern: '^exec\.Command(Context)?$'
+          msg: "git-dirty never executes programs at runtime; only tests may run git (CLAUDE.md)"
+    # CLAUDE.md: internal/git imports the standard library only.
+    depguard:
+      rules:
+        internal-git-stdlib-only:
+          files:
+            - "**/internal/git/**"
+            - "!$test"
+          allow:
+            - $gostd
+          deny:
+            - pkg: github.com/go-git/go-git
+              desc: "internal/git reads git storage itself, with the standard library only (CLAUDE.md)"
+
+  exclusions:
+    rules:
+      - path: '_test\.go$'
+        linters:
+          - forbidigo
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+    - golines
+
+  settings:
+    golines:
+      max-len: 120
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: "interface{}"
+          replacement: "any"
+        - pattern: "a[b:len(a)]"
+          replacement: "a[b:]"
+    goimports:
+      local-prefixes:
+        - github.com/ivuorinen/git-dirty
+
+issues:
+  max-issues-per-linter: 150
+  max-same-issues: 50
+  fix: true

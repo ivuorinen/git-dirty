@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(**/*.go)",
+            "command": "mise run --quiet lint:hook",
+            "timeout": 300,
+            "statusMessage": "golangci-lint"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/*.go)",
+            "command": "mise run --quiet lint:hook",
+            "timeout": 300,
+            "statusMessage": "golangci-lint"
+          }
+        ]
+      }
+    ]
+  }
+}

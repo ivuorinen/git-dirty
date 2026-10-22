@@ -41,7 +41,7 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
 
-      - name: Lint (gofmt, go vet, staticcheck)
+      - name: Lint (golangci-lint)
         run: mise run lint
 
       - name: Test with race detector
