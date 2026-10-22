@@ -2,6 +2,16 @@ package gitstat
 
 import "testing"
 
+// gitLabel returns a func deriving the expected head label from git itself:
+// the output of git with args.
+func gitLabel(args ...string) func(t *testing.T, dir string) string {
+	return func(t *testing.T, dir string) string {
+		t.Helper()
+
+		return git(t, dir, args...)
+	}
+}
+
 func TestHead(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -15,56 +25,66 @@ func TestHead(t *testing.T) {
 		{
 			name: "branch",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				dir := newRepo(t)
 				git(t, dir, "switch", "-q", "-c", "feature/x")
+
 				return dir
 			},
-			want:       func(t *testing.T, dir string) string { return git(t, dir, "symbolic-ref", "--short", "HEAD") },
+			want:       gitLabel("symbolic-ref", "--short", "HEAD"),
 			wantBranch: true,
 		},
 		{
 			name: "detached on lightweight tag",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				dir := newRepo(t)
 				git(t, dir, "tag", "v1")
 				commitFile(t, dir, "b.txt", "b\n", "next")
 				git(t, dir, "switch", "-q", "--detach", "v1")
+
 				return dir
 			},
-			want:         func(t *testing.T, dir string) string { return git(t, dir, "describe", "--tags", "--exact-match") },
+			want:         gitLabel("describe", "--tags", "--exact-match"),
 			wantDetached: true,
 		},
 		{
 			name: "detached on annotated tag",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				dir := newRepo(t)
 				git(t, dir, "tag", "-a", "-m", "release", "v2")
 				commitFile(t, dir, "b.txt", "b\n", "next")
 				git(t, dir, "switch", "-q", "--detach", "v2")
+
 				return dir
 			},
-			want:         func(t *testing.T, dir string) string { return git(t, dir, "describe", "--tags", "--exact-match") },
+			want:         gitLabel("describe", "--tags", "--exact-match"),
 			wantDetached: true,
 		},
 		{
 			name: "detached without tag",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				dir := newRepo(t)
 				commitFile(t, dir, "b.txt", "b\n", "next")
 				git(t, dir, "switch", "-q", "--detach", "HEAD~1")
+
 				return dir
 			},
-			want:         func(t *testing.T, dir string) string { return git(t, dir, "rev-parse", "--short", "HEAD") },
+			want:         gitLabel("rev-parse", "--short", "HEAD"),
 			wantDetached: true,
 		},
 		{
 			name: "unborn",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				dir := t.TempDir()
 				git(t, dir, "init", "-q")
+
 				return dir
 			},
-			want:       func(t *testing.T, dir string) string { return git(t, dir, "symbolic-ref", "--short", "HEAD") },
+			want:       gitLabel("symbolic-ref", "--short", "HEAD"),
 			wantBranch: true,
 			wantUnborn: true,
 		},

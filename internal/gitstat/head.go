@@ -34,12 +34,14 @@ func (r *Repo) head() (Head, error) {
 		id, err := r.repo.Resolve(ref.Target)
 		if errors.Is(err, gitrepo.ErrRefNotFound) {
 			h.Unborn = true
+
 			return h, nil
 		}
 		if err != nil {
 			return h, err
 		}
 		h.Hash = id
+
 		return h, nil
 	}
 
@@ -57,6 +59,7 @@ func (r *Repo) head() (Head, error) {
 	if tag != "" {
 		h.Label = tag
 	}
+
 	return h, nil
 }
 
@@ -84,5 +87,6 @@ func (r *Repo) exactTag(commit gitrepo.ObjectID) (string, error) {
 		return "", nil
 	}
 	sort.Strings(names)
+
 	return names[0], nil
 }

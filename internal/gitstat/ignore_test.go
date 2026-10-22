@@ -32,6 +32,7 @@ func ignored(t *testing.T, r *Repo, ex *Excludes, rel string, isDir bool) bool {
 			}
 		}
 	}
+
 	return false
 }
 
@@ -65,6 +66,7 @@ func TestIgnore_GlobalExcludesFile(t *testing.T) {
 		{
 			name: "XDG default ignore file",
 			setup: func(t *testing.T, home string) {
+				t.Helper()
 				write(t, home, ".config/git/ignore", "*.log\n.ignore\n")
 			},
 			paths: []string{"x.log", "x.txt", ".ignore"},
@@ -72,6 +74,7 @@ func TestIgnore_GlobalExcludesFile(t *testing.T) {
 		{
 			name: "core.excludesFile in ~/.gitconfig",
 			setup: func(t *testing.T, home string) {
+				t.Helper()
 				write(t, home, ".gitconfig", baseGitconfig+"[core]\n\texcludesFile = ~/my-ignore\n")
 				write(t, home, "my-ignore", "secret*\n")
 			},
@@ -80,6 +83,7 @@ func TestIgnore_GlobalExcludesFile(t *testing.T) {
 		{
 			name: "core.excludesFile in ~/.config/git/config",
 			setup: func(t *testing.T, home string) {
+				t.Helper()
 				write(t, home, ".config/git/config", "[core]\n\texcludesFile = ~/cfg-ignore\n")
 				write(t, home, "cfg-ignore", "*.tmp\n")
 			},
@@ -88,6 +92,7 @@ func TestIgnore_GlobalExcludesFile(t *testing.T) {
 		{
 			name: "~/.gitconfig wins over the XDG config",
 			setup: func(t *testing.T, home string) {
+				t.Helper()
 				write(t, home, ".config/git/config", "[core]\n\texcludesFile = ~/xdg-ignore\n")
 				write(t, home, "xdg-ignore", "*.xdg\n")
 				write(t, home, ".gitconfig", baseGitconfig+"[core]\n\texcludesFile = ~/home-ignore\n")

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +29,7 @@ type coreConfig struct {
 
 func (r *Repo) coreConfig() (coreConfig, error) {
 	cfg := r.repo.Config
+
 	return coreConfig{
 		fileMode:   cfg.Bool("core", "", "filemode", true),
 		symlinks:   cfg.Bool("core", "", "symlinks", true),
@@ -39,66 +42,66 @@ func (r *Repo) coreConfig() (coreConfig, error) {
 // for submodules, whose untracked files make them modified.
 func (r *Repo) modified(ctx context.Context, idx *gitrepo.Index, cc coreConfig, ex *Excludes) (bool, error) {
 	for i := range idx.Entries {
-		e := &idx.Entries[i]
 		if i%ctxCheckEvery == 0 {
 			if err := ctx.Err(); err != nil {
 				return false, err
 			}
 		}
-		if e.SkipWorktree {
-			continue
-		}
-		if e.Stage != 0 || e.IntentToAdd {
-			return true, nil
-		}
-		abs := filepath.Join(r.worktree, filepath.FromSlash(e.Name))
-		if e.Mode == gitrepo.ModeGitlink {
-			changed, err := submoduleChanged(ctx, abs, e.ID, ex)
-			if err != nil || changed {
-				return changed, err
-			}
-			continue
-		}
-		fi, err := os.Lstat(abs)
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-			return true, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		changed, err := entryChanged(e, abs, fi, idx.ModTime, cc, r.repo.Format)
+		changed, err := r.entryModified(ctx, &idx.Entries[i], idx.ModTime, cc, ex)
 		if err != nil || changed {
 			return changed, err
 		}
 	}
+
 	return false, nil
+}
+
+// entryModified reports whether the worktree differs from one index entry.
+// indexTime is the index file's mtime, for the racy-git check.
+func (r *Repo) entryModified(
+	ctx context.Context,
+	e *gitrepo.IndexEntry,
+	indexTime time.Time,
+	cc coreConfig,
+	ex *Excludes,
+) (bool, error) {
+	if e.SkipWorktree {
+		return false, nil
+	}
+	if e.Stage != 0 || e.IntentToAdd {
+		return true, nil
+	}
+	abs := filepath.Join(r.worktree, filepath.FromSlash(e.Name))
+	if e.Mode == gitrepo.ModeGitlink {
+		return submoduleChanged(ctx, abs, e.ID, ex)
+	}
+	fi, err := os.Lstat(abs)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return entryChanged(e, abs, fi, indexTime, cc, r.repo.Format)
 }
 
 // entryChanged compares one index entry with the file on disk. Matching size
 // and mtime trust the index unless the entry is racily clean (the file's mtime
 // is not older than the index file's); otherwise the content is hashed.
-func entryChanged(e *gitrepo.IndexEntry, abs string, fi fs.FileInfo, indexTime time.Time, cc coreConfig, f gitrepo.Format) (bool, error) {
+func entryChanged(
+	e *gitrepo.IndexEntry,
+	abs string,
+	fi fs.FileInfo,
+	indexTime time.Time,
+	cc coreConfig,
+	f gitrepo.Format,
+) (bool, error) {
 	isLink := fi.Mode()&fs.ModeSymlink != 0
-	switch e.Mode {
-	case gitrepo.ModeSymlink:
-		// Without core.symlinks the link is checked out as a plain file
-		// holding the target, so either form is accepted.
-		if cc.symlinks && !isLink {
-			return true, nil
-		}
-		if !cc.symlinks && !isLink && !fi.Mode().IsRegular() {
-			return true, nil
-		}
-	default:
-		if !fi.Mode().IsRegular() {
-			return true, nil
-		}
-		if cc.fileMode && (e.Mode == gitrepo.ModeExecutable) != (fi.Mode().Perm()&0o111 != 0) {
-			return true, nil
-		}
+	if modeChanged(e, fi, isLink, cc) {
+		return true, nil
 	}
-	// The index stores the size truncated to 32 bits.
-	if uint32(fi.Size()) != e.Size {
+	if indexSize(fi.Size()) != e.Size {
 		return true, nil
 	}
 	if sameMtime(fi.ModTime(), e.MTime) && fi.ModTime().Before(indexTime) {
@@ -108,7 +111,33 @@ func entryChanged(e *gitrepo.IndexEntry, abs string, fi fs.FileInfo, indexTime t
 	if err != nil {
 		return false, err
 	}
+
 	return h != e.ID, nil
+}
+
+// modeChanged reports whether the file's type, or its executable bit when
+// core.fileMode is set, no longer matches the entry's mode.
+func modeChanged(e *gitrepo.IndexEntry, fi fs.FileInfo, isLink bool, cc coreConfig) bool {
+	if e.Mode == gitrepo.ModeSymlink {
+		// Without core.symlinks the link is checked out as a plain file
+		// holding the target, so either form is accepted.
+		if cc.symlinks {
+			return !isLink
+		}
+
+		return !isLink && !fi.Mode().IsRegular()
+	}
+	if !fi.Mode().IsRegular() {
+		return true
+	}
+
+	return cc.fileMode && (e.Mode == gitrepo.ModeExecutable) != (fi.Mode().Perm()&0o111 != 0)
+}
+
+// indexSize is a file size as the index stores it: truncated to its low 32
+// bits, since git keeps it in an unsigned int (ce_stat_data's sd_size).
+func indexSize(size int64) uint32 {
+	return uint32(size & math.MaxUint32)
 }
 
 // sameMtime compares to the second, and to the nanosecond only when the index
@@ -117,6 +146,7 @@ func sameMtime(disk, entry time.Time) bool {
 	if disk.Unix() != entry.Unix() {
 		return false
 	}
+
 	return entry.Nanosecond() == 0 || disk.Nanosecond() == entry.Nanosecond()
 }
 
@@ -128,17 +158,19 @@ func hashWorktreeFile(abs string, fi fs.FileInfo, isLink bool, f gitrepo.Format)
 		if err != nil {
 			return gitrepo.ObjectID{}, err
 		}
+
 		return f.HashObject(gitrepo.ObjBlob, []byte(filepath.ToSlash(target))), nil
 	}
-	file, err := os.Open(abs)
+	file, err := os.Open(filepath.Clean(abs))
 	if err != nil {
 		return gitrepo.ObjectID{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only: a close error carries no information
 	h := f.NewObjectHasher(gitrepo.ObjBlob, fi.Size())
 	if _, err := io.Copy(h, file); err != nil {
 		return gitrepo.ObjectID{}, err
 	}
+
 	return h.Sum(), nil
 }
 
@@ -147,12 +179,7 @@ func hashWorktreeFile(abs string, fi fs.FileInfo, isLink bool, f gitrepo.Format)
 // which case any entry counts as staged.
 func (r *Repo) staged(ctx context.Context, idx *gitrepo.Index, head gitrepo.ObjectID) (bool, error) {
 	if head.IsZero() {
-		for _, e := range idx.Entries {
-			if !e.IntentToAdd {
-				return true, nil
-			}
-		}
-		return false, nil
+		return hasStagedEntry(idx), nil
 	}
 	commit, err := r.repo.ReadCommit(head)
 	if err != nil {
@@ -164,41 +191,69 @@ func (r *Repo) staged(ctx context.Context, idx *gitrepo.Index, head gitrepo.Obje
 	if t := idx.Tree; t != nil && t.Entries == len(idx.Entries) && t.ID == commit.Tree {
 		return false, nil
 	}
-
-	type blob struct {
-		id   gitrepo.ObjectID
-		mode uint32
+	inTree, err := r.treeBlobs(ctx, commit.Tree)
+	if err != nil {
+		return false, err
 	}
-	inTree := make(map[string]blob)
+
+	return indexDiffersFromTree(idx, inTree), nil
+}
+
+// hasStagedEntry reports whether the index holds an entry with content, one
+// not only marked intent-to-add.
+func hasStagedEntry(idx *gitrepo.Index) bool {
+	for _, e := range idx.Entries {
+		if !e.IntentToAdd {
+			return true
+		}
+	}
+
+	return false
+}
+
+// treeBlob is a non-tree entry of a commit's tree.
+type treeBlob struct {
+	id   gitrepo.ObjectID
+	mode uint32
+}
+
+// treeBlobs reads every non-tree entry under tree, keyed by its path.
+func (r *Repo) treeBlobs(ctx context.Context, tree gitrepo.ObjectID) (map[string]treeBlob, error) {
+	blobs := make(map[string]treeBlob)
 	n := 0
-	err = r.repo.WalkTree(commit.Tree, func(path string, e gitrepo.TreeEntry) error {
+	err := r.repo.WalkTree(tree, func(path string, e gitrepo.TreeEntry) error {
 		if n++; n%ctxCheckEvery == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
-		inTree[path] = blob{e.ID, e.Mode}
+		blobs[path] = treeBlob{e.ID, e.Mode}
+
 		return nil
 	})
-	if err != nil {
-		return false, err
-	}
 
+	return blobs, err
+}
+
+// indexDiffersFromTree reports whether the index entries differ from the
+// tree's blobs: a conflict, a changed or added entry, or a removed one.
+func indexDiffersFromTree(idx *gitrepo.Index, inTree map[string]treeBlob) bool {
 	matched := 0
 	for _, e := range idx.Entries {
 		if e.IntentToAdd {
 			continue // not staged content; `git diff --cached` ignores it
 		}
 		if e.Stage != 0 {
-			return true, nil
+			return true
 		}
 		b, ok := inTree[e.Name]
 		if !ok || b.id != e.ID || b.mode != e.Mode {
-			return true, nil
+			return true
 		}
 		matched++
 	}
-	return matched != len(inTree), nil
+
+	return matched != len(inTree)
 }
 
 // untracked reports whether the worktree holds a file that is neither in the
@@ -219,6 +274,7 @@ func (r *Repo) untracked(ctx context.Context, idx *gitrepo.Index, cc coreConfig,
 		return false, err
 	}
 	w := untrackedWalker{ctx: ctx, tracked: tracked, key: key}
+
 	return w.walk(r.worktree, nil, st)
 }
 
@@ -239,6 +295,7 @@ func (w *untrackedWalker) walk(dirAbs string, rel []string, st ignoreStack) (boo
 		if rel == nil {
 			return false, err
 		}
+
 		return false, nil // git warns and skips unreadable subdirectories
 	}
 	for _, de := range entries {
@@ -247,31 +304,36 @@ func (w *untrackedWalker) walk(dirAbs string, rel []string, st ignoreStack) (boo
 				return false, err
 			}
 		}
-		name := de.Name()
-		if name == ".git" {
-			continue
-		}
-		path := append(rel[:len(rel):len(rel)], name)
-		_, isTracked := w.tracked[w.key(strings.Join(path, "/"))]
-		if !de.IsDir() { // files and symlinks, including symlinks to directories
-			if !isTracked && !st.match(path, false) {
-				return true, nil
-			}
-			continue
-		}
-		if isTracked || st.match(path, true) { // a submodule, or ignored
-			continue
-		}
-		sub := filepath.Join(dirAbs, name)
-		if _, err := os.Lstat(filepath.Join(sub, ".git")); err == nil {
-			return true, nil // nested repository
-		}
-		found, err := w.walk(sub, path, st)
+		found, err := w.visit(dirAbs, rel, de, st)
 		if err != nil || found {
 			return found, err
 		}
 	}
+
 	return false, nil
+}
+
+// visit reports whether the entry de of the directory dirAbs (rel inside the
+// worktree) is an untracked file or holds one.
+func (w *untrackedWalker) visit(dirAbs string, rel []string, de fs.DirEntry, st ignoreStack) (bool, error) {
+	name := de.Name()
+	if name == ".git" {
+		return false, nil
+	}
+	path := append(slices.Clip(rel), name) // a fresh slice: siblings must not share it
+	_, isTracked := w.tracked[w.key(strings.Join(path, "/"))]
+	if !de.IsDir() { // files and symlinks, including symlinks to directories
+		return !isTracked && !st.match(path, false), nil
+	}
+	if isTracked || st.match(path, true) { // a submodule, or ignored
+		return false, nil
+	}
+	sub := filepath.Join(dirAbs, name)
+	if _, err := os.Lstat(filepath.Join(sub, ".git")); err == nil {
+		return true, nil // nested repository
+	}
+
+	return w.walk(sub, path, st)
 }
 
 // stashed reports whether refs/stash exists, loose or packed.
@@ -280,6 +342,7 @@ func (r *Repo) stashed() (bool, error) {
 	if errors.Is(err, gitrepo.ErrRefNotFound) {
 		return false, nil
 	}
+
 	return err == nil, err
 }
 
@@ -296,7 +359,7 @@ func submoduleChanged(ctx context.Context, abs string, want gitrepo.ObjectID, ex
 	if err != nil {
 		return false, err
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }() // read-only pack files: a close error carries no information
 	h, err := sub.head()
 	if err != nil {
 		return false, err
@@ -315,5 +378,6 @@ func submoduleChanged(ctx context.Context, abs string, want gitrepo.ObjectID, ex
 	if changed, err := sub.modified(ctx, idx, cc, ex); err != nil || changed {
 		return changed, err
 	}
+
 	return sub.staged(ctx, idx, h.Hash)
 }

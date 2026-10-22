@@ -5,6 +5,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -25,18 +26,19 @@ func (r *Repo) newCommitWalker() (*commitWalker, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &commitWalker{repo: r.repo, shallow: shallow}, nil
 }
 
 func readShallow(path string, f gitrepo.Format) (map[gitrepo.ObjectID]bool, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(filepath.Clean(path))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only: a close error carries no information
 	set := make(map[gitrepo.ObjectID]bool)
 	sc := bufio.NewScanner(file)
 	for sc.Scan() {
@@ -44,6 +46,7 @@ func readShallow(path string, f gitrepo.Format) (map[gitrepo.ObjectID]bool, erro
 			set[id] = true
 		}
 	}
+
 	return set, sc.Err()
 }
 
@@ -70,6 +73,7 @@ func (w *commitWalker) node(id gitrepo.ObjectID) (commitNode, error) {
 	if err != nil {
 		return commitNode{}, err
 	}
+
 	return commitNode{id: id, parents: c.Parents, when: c.CommitTime}, nil
 }
 
@@ -86,11 +90,7 @@ func (w *commitWalker) aheadBehind(ctx context.Context, a, b gitrepo.ObjectID) (
 	if a == b {
 		return 0, 0, nil
 	}
-	s := walkState{
-		flags:  make(map[gitrepo.ObjectID]uint8),
-		queued: make(map[gitrepo.ObjectID]bool),
-		done:   make(map[gitrepo.ObjectID]bool),
-	}
+	s := newWalkState()
 	for _, tip := range []struct {
 		id gitrepo.ObjectID
 		f  uint8
@@ -102,53 +102,39 @@ func (w *commitWalker) aheadBehind(ctx context.Context, a, b gitrepo.ObjectID) (
 		s.add(n, tip.f)
 	}
 
-	slop := walkSlop
-	for steps := 0; s.q.Len() > 0; steps++ {
-		if s.nonStale == 0 && s.late == 0 {
-			if slop == 0 {
-				break
-			}
-			slop--
-		} else {
-			slop = walkSlop
-		}
+	for steps := 0; s.q.Len() > 0 && s.keepWalking(); steps++ {
 		if steps%ctxCheckEvery == 0 {
 			if err := ctx.Err(); err != nil {
 				return 0, 0, err
 			}
 		}
-		it := heap.Pop(&s.q).(queueItem)
-		id := it.node.id
-		s.queued[id] = false
-		f := s.flags[id]
-		if f != fromBoth {
-			s.nonStale--
-		}
-		if it.late {
-			s.late--
-		}
-		s.done[id] = true
-		switch f {
-		case fromA:
-			s.ahead++
-		case fromB:
-			s.behind++
-		}
-		if w.shallow[id] {
-			continue
-		}
-		for _, p := range it.node.parents {
-			if s.flags[p]|f == s.flags[p] {
-				continue // nothing new to propagate
-			}
-			n, err := w.node(p)
-			if err != nil {
-				return 0, 0, err
-			}
-			s.add(n, f)
+		n, f := s.pop()
+		if err := w.visitParents(s, n, f); err != nil {
+			return 0, 0, err
 		}
 	}
+
 	return s.ahead, s.behind, nil
+}
+
+// visitParents propagates bits f from n to its parents, reading each parent
+// that gains a bit. The parents of a shallow boundary commit are not visited.
+func (w *commitWalker) visitParents(s *walkState, n commitNode, f uint8) error {
+	if w.shallow[n.id] {
+		return nil
+	}
+	for _, p := range n.parents {
+		if s.flags[p]|f == s.flags[p] {
+			continue // nothing new to propagate
+		}
+		pn, err := w.node(p)
+		if err != nil {
+			return err
+		}
+		s.add(pn, f)
+	}
+
+	return nil
 }
 
 type walkState struct {
@@ -158,8 +144,18 @@ type walkState struct {
 	done     map[gitrepo.ObjectID]bool
 	nonStale int // queued commits not yet reachable from both tips
 	late     int // queued commits that gained a bit after being counted
+	slop     int // common commits still to visit once the queue is all common
 	ahead    int
 	behind   int
+}
+
+func newWalkState() *walkState {
+	return &walkState{
+		flags:  make(map[gitrepo.ObjectID]uint8),
+		queued: make(map[gitrepo.ObjectID]bool),
+		done:   make(map[gitrepo.ObjectID]bool),
+		slop:   walkSlop,
+	}
 }
 
 // add merges bits f into the commit's flags and queues it when that changes
@@ -175,6 +171,7 @@ func (s *walkState) add(n commitNode, f uint8) {
 		if nf == fromBoth {
 			s.nonStale-- // it was counted as non-stale when queued
 		}
+
 		return
 	}
 	late := s.done[n.id]
@@ -195,6 +192,48 @@ func (s *walkState) add(n commitNode, f uint8) {
 	heap.Push(&s.q, queueItem{node: n, late: late})
 }
 
+// keepWalking reports whether the walk goes on. While every queued commit is
+// common to both tips and none is late, each step spends one unit of slop;
+// any other commit restores the full allowance.
+func (s *walkState) keepWalking() bool {
+	if s.nonStale != 0 || s.late != 0 {
+		s.slop = walkSlop
+
+		return true
+	}
+	if s.slop == 0 {
+		return false
+	}
+	s.slop--
+
+	return true
+}
+
+// pop removes the newest queued commit, counts it on the side its bits put it
+// and returns it with those bits.
+func (s *walkState) pop() (commitNode, uint8) {
+	it := s.q[0] // heap.Pop removes the root, q[0]
+	heap.Pop(&s.q)
+	id := it.node.id
+	s.queued[id] = false
+	f := s.flags[id]
+	if f != fromBoth {
+		s.nonStale--
+	}
+	if it.late {
+		s.late--
+	}
+	s.done[id] = true
+	switch f {
+	case fromA:
+		s.ahead++
+	case fromB:
+		s.behind++
+	}
+
+	return it.node, f
+}
+
 type queueItem struct {
 	node commitNode
 	late bool
@@ -206,10 +245,20 @@ type commitQueue []queueItem
 func (q commitQueue) Len() int           { return len(q) }
 func (q commitQueue) Less(i, j int) bool { return q[i].node.when.After(q[j].node.when) }
 func (q commitQueue) Swap(i, j int)      { q[i], q[j] = q[j], q[i] }
-func (q *commitQueue) Push(x any)        { *q = append(*q, x.(queueItem)) }
+
+// Push implements heap.Interface; the walk pushes only queueItem values.
+func (q *commitQueue) Push(x any) {
+	it, ok := x.(queueItem)
+	if !ok {
+		panic(fmt.Sprintf("commitQueue: pushed %T, want queueItem", x))
+	}
+	*q = append(*q, it)
+}
+
 func (q *commitQueue) Pop() any {
 	old := *q
 	it := old[len(old)-1]
 	*q = old[:len(old)-1]
+
 	return it
 }

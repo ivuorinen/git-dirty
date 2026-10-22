@@ -25,31 +25,50 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	if err := isolateGitEnv(home); err != nil {
+		_ = os.RemoveAll(home)
+		panic(err)
+	}
+	code := m.Run()
+	if err := os.RemoveAll(home); err != nil {
+		fmt.Fprintf(os.Stderr, "removing %s: %v\n", home, err)
+	}
+	os.Exit(code)
+}
+
+// isolateGitEnv points HOME at home, holding only baseGitconfig, and clears
+// the variables that would let git read anything else.
+func isolateGitEnv(home string) error {
 	for k, v := range map[string]string{
 		"HOME":                home,
 		"XDG_CONFIG_HOME":     filepath.Join(home, ".config"),
 		"GIT_CONFIG_NOSYSTEM": "1",
-		"GIT_CONFIG_GLOBAL":   "",
 		"GIT_AUTHOR_NAME":     "Test",
 		"GIT_AUTHOR_EMAIL":    "test@example.invalid",
 		"GIT_COMMITTER_NAME":  "Test",
 		"GIT_COMMITTER_EMAIL": "test@example.invalid",
 		"GIT_TERMINAL_PROMPT": "0",
 	} {
-		os.Setenv(k, v)
+		if err := os.Setenv(k, v); err != nil {
+			return err
+		}
 	}
-	os.Unsetenv("GIT_CONFIG_GLOBAL")
-	os.Unsetenv("GIT_DIR")
-	os.Unsetenv("GIT_WORK_TREE")
-	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(baseGitconfig), 0o644); err != nil {
-		panic(err)
+	for _, k := range []string{"GIT_CONFIG_GLOBAL", "GIT_DIR", "GIT_WORK_TREE"} {
+		if err := os.Unsetenv(k); err != nil {
+			return err
+		}
 	}
-	code := m.Run()
-	os.RemoveAll(home)
-	os.Exit(code)
+
+	return os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(baseGitconfig), 0o600)
 }
 
-const baseGitconfig = "[init]\n\tdefaultBranch = main\n[protocol \"file\"]\n\tallow = always\n[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n"
+// mainBranch is the initial branch of every repository the tests create.
+const mainBranch = "main"
+
+const baseGitconfig = "[init]\n\tdefaultBranch = " + mainBranch + "\n" +
+	"[protocol \"file\"]\n\tallow = always\n" +
+	"[commit]\n\tgpgsign = false\n" +
+	"[tag]\n\tgpgsign = false\n"
 
 // isolatedHome gives one test its own HOME and XDG_CONFIG_HOME, for tests
 // that write global git configuration.
@@ -59,6 +78,7 @@ func isolatedHome(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	write(t, home, ".gitconfig", baseGitconfig)
+
 	return home
 }
 
@@ -66,6 +86,7 @@ func isolatedHome(t *testing.T) string {
 // GIT_DEFAULT_HASH sets the object format of every repository git init or
 // git clone creates in the subtest.
 func forEachFormat(t *testing.T, body func(t *testing.T)) {
+	t.Helper()
 	for _, format := range []string{"sha1", "sha256"} {
 		t.Run(format, func(t *testing.T) {
 			t.Setenv("GIT_DEFAULT_HASH", format)
@@ -86,13 +107,14 @@ func git(t *testing.T, dir string, args ...string) string {
 	if code != 0 {
 		t.Fatalf("git %s: exit %d: %s", strings.Join(args, " "), code, out)
 	}
+
 	return out
 }
 
 // gitCode runs git in dir and returns trimmed combined output and exit code.
 func gitCode(t *testing.T, dir string, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) //nolint:gosec // G204: tests run git as their oracle, with fixture arguments
 	cmd.Dir = dir
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -104,6 +126,7 @@ func gitCode(t *testing.T, dir string, args ...string) (string, int) {
 		}
 		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
 	}
+
 	return strings.TrimSpace(buf.String()), 0
 }
 
@@ -111,6 +134,7 @@ func gitCode(t *testing.T, dir string, args ...string) (string, int) {
 // build histories whose dates disagree with their topology.
 func commitAt(t *testing.T, dir, msg string, at time.Time) {
 	t.Helper()
+	//nolint:gosec // G204: tests run git as their oracle; msg is a fixture commit message
 	cmd := exec.Command("git", "commit", "-q", "--allow-empty", "-m", msg)
 	cmd.Dir = dir
 	stamp := at.Format(time.RFC3339)
@@ -128,16 +152,17 @@ func newRepo(t *testing.T) string {
 	write(t, dir, "a.txt", "a\n")
 	git(t, dir, "add", "a.txt")
 	git(t, dir, "commit", "-q", "-m", "init")
+
 	return dir
 }
 
 func write(t *testing.T, dir, name, body string) {
 	t.Helper()
 	p := filepath.Join(dir, filepath.FromSlash(name))
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -160,6 +185,7 @@ func hashOf(t *testing.T, dir, rev string) gitrepo.ObjectID {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return id
 }
 
@@ -169,6 +195,23 @@ func open(t *testing.T, dir string) *Repo {
 	if err != nil {
 		t.Fatalf("Open(%s): %v", dir, err)
 	}
-	t.Cleanup(func() { r.Close() })
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Errorf("Close(%s): %v", dir, err)
+		}
+	})
+
 	return r
+}
+
+// countFDs returns how many file descriptors the process has open. It reads
+// /proc/self/fd, so callers skip on anything but Linux.
+func countFDs(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return len(entries)
 }

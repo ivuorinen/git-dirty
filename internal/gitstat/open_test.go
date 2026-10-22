@@ -20,6 +20,7 @@ func headHash(t *testing.T, r *Repo) gitrepo.ObjectID {
 	if _, err := r.repo.ReadCommit(id); err != nil {
 		t.Fatalf("read HEAD commit: %v", err)
 	}
+
 	return id
 }
 
@@ -89,14 +90,7 @@ func TestOpenClose_ReleasesDescriptors(t *testing.T) {
 	// read until Close.
 	git(t, dir, "gc", "-q")
 
-	countFDs := func() int {
-		entries, err := os.ReadDir("/proc/self/fd")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return len(entries)
-	}
-	before := countFDs()
+	before := countFDs(t)
 	for range 500 {
 		r, err := Open(dir)
 		if err != nil {
@@ -117,7 +111,7 @@ func TestOpenClose_ReleasesDescriptors(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if after := countFDs(); after > before {
+	if after := countFDs(t); after > before {
 		t.Errorf("descriptors leaked: %d before, %d after 500 open/close cycles", before, after)
 	}
 }

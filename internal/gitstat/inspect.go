@@ -36,6 +36,7 @@ type Result struct {
 // yet pushed to the upstream. Being behind does not make a repository dirty.
 func (r Result) Dirty() bool {
 	s := r.Status
+
 	return s.Modified || s.Staged || s.Untracked || s.Stashed ||
 		(r.Upstream != nil && r.Upstream.Ahead > 0)
 }
@@ -45,6 +46,7 @@ func (r Result) Dirty() bool {
 func Inspect(ctx context.Context, path string, opts Options) Result {
 	res := Result{Path: path}
 	res.Err = inspect(ctx, path, opts, &res)
+
 	return res
 }
 
@@ -62,6 +64,19 @@ func inspect(ctx context.Context, path string, opts Options, res *Result) (err e
 	if res.Head, err = r.head(); err != nil {
 		return fmt.Errorf("head: %w", err)
 	}
+	if err = r.inspectStatus(ctx, opts, res); err != nil {
+		return err
+	}
+	if res.Head.Unborn {
+		return nil
+	}
+
+	return r.inspectTracking(ctx, opts, res)
+}
+
+// inspectStatus fills res.Status, the dirty-state letters. res.Head must be
+// set.
+func (r *Repo) inspectStatus(ctx context.Context, opts Options, res *Result) error {
 	idx, err := r.repo.ReadIndex()
 	if err != nil {
 		return fmt.Errorf("index: %w", err)
@@ -86,10 +101,13 @@ func inspect(ctx context.Context, path string, opts Options, res *Result) (err e
 			return fmt.Errorf("stash: %w", err)
 		}
 	}
-	if res.Head.Unborn {
-		return nil
-	}
 
+	return nil
+}
+
+// inspectTracking fills res.Upstream and res.Default. res.Head must be set
+// and born.
+func (r *Repo) inspectTracking(ctx context.Context, opts Options, res *Result) error {
 	w, err := r.newCommitWalker()
 	if err != nil {
 		return fmt.Errorf("shallow: %w", err)
@@ -103,5 +121,6 @@ func inspect(ctx context.Context, path string, opts Options, res *Result) (err e
 	if res.Default, err = r.defaultBranch(ctx, w, cfg, res.Head, opts.MainBranches); err != nil {
 		return fmt.Errorf("default branch: %w", err)
 	}
+
 	return nil
 }

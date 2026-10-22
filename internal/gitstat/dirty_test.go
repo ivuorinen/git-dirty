@@ -21,6 +21,7 @@ func gitVerdict(t *testing.T, dir string, args ...string) bool {
 		return true
 	}
 	t.Fatalf("git %v: exit %d: %s", args, code, out)
+
 	return false
 }
 
@@ -43,6 +44,7 @@ func ourModified(t *testing.T, dir string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return got
 }
 
@@ -60,6 +62,7 @@ func racyFixture(t *testing.T, newContent string) string {
 	write(t, dir, "a.txt", newContent)
 	chtimes(t, p, stamp)
 	chtimes(t, filepath.Join(dir, ".git", "index"), stamp)
+
 	return dir
 }
 
@@ -70,9 +73,49 @@ func chtimes(t *testing.T, p string, at time.Time) {
 	}
 }
 
+func remove(t *testing.T, p string) {
+	t.Helper()
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// makeExecutable gives the file the executable bits that core.fileMode
+// compares.
+func makeExecutable(t *testing.T, p string) {
+	t.Helper()
+	//nolint:gosec // G302: the fixture is about the executable bit, so the mode must exceed 0600
+	if err := os.Chmod(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mkdirAll(t *testing.T, p string) {
+	t.Helper()
+	if err := os.MkdirAll(p, 0o750); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mergeConflict leaves a.txt conflicted between main and another branch.
+func mergeConflict(t *testing.T) string {
+	t.Helper()
+	dir := newRepo(t)
+	git(t, dir, "switch", "-q", "-c", "other")
+	commitFile(t, dir, "a.txt", "other\n", "other")
+	git(t, dir, "switch", "-q", mainBranch)
+	commitFile(t, dir, "a.txt", "main\n", "main")
+	if _, code := gitCode(t, dir, "merge", "-q", "other"); code == 0 {
+		t.Fatal("fixture: merge did not conflict")
+	}
+
+	return dir
+}
+
 func TestModified(t *testing.T) { forEachFormat(t, testModified) }
 
 func testModified(t *testing.T) {
+	t.Helper()
 	type fixture func(t *testing.T) string
 	unix := runtime.GOOS != "windows"
 	tests := []struct {
@@ -82,51 +125,74 @@ func testModified(t *testing.T) {
 	}{
 		{name: "clean", setup: newRepo},
 		{name: "content changed", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			write(t, dir, "a.txt", "changed\n")
+
 			return dir
 		}},
 		{name: "deleted", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
-			os.Remove(filepath.Join(dir, "a.txt"))
+			remove(t, filepath.Join(dir, "a.txt"))
+
 			return dir
 		}},
-		{name: "racy same-size edit", setup: func(t *testing.T) string { return racyFixture(t, "bbbb\n") }},
-		{name: "racy but unchanged", setup: func(t *testing.T) string { return racyFixture(t, "aaaa\n") }},
+		{name: "racy same-size edit", setup: func(t *testing.T) string {
+			t.Helper()
+
+			return racyFixture(t, "bbbb\n")
+		}},
+		{name: "racy but unchanged", setup: func(t *testing.T) string {
+			t.Helper()
+
+			return racyFixture(t, "aaaa\n")
+		}},
 		{name: "touch without content change", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			chtimes(t, filepath.Join(dir, "a.txt"), time.Now().Add(time.Hour))
+
 			return dir
 		}},
 		{name: "chmod +x with core.fileMode=true", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
-			os.Chmod(filepath.Join(dir, "a.txt"), 0o755)
+			makeExecutable(t, filepath.Join(dir, "a.txt"))
+
 			return dir
 		}},
 		{name: "chmod +x with core.fileMode=false", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			git(t, dir, "config", "core.fileMode", "false")
-			os.Chmod(filepath.Join(dir, "a.txt"), 0o755)
+			makeExecutable(t, filepath.Join(dir, "a.txt"))
+
 			return dir
 		}},
 		{name: "file replaced by symlink", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
-			os.Remove(filepath.Join(dir, "a.txt"))
+			remove(t, filepath.Join(dir, "a.txt"))
 			if err := os.Symlink("elsewhere", filepath.Join(dir, "a.txt")); err != nil {
 				t.Fatal(err)
 			}
+
 			return dir
 		}},
 		{name: "committed symlink unchanged", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			if err := os.Symlink("a.txt", filepath.Join(dir, "link")); err != nil {
 				t.Fatal(err)
 			}
 			git(t, dir, "add", "link")
 			git(t, dir, "commit", "-q", "-m", "link")
+
 			return dir
 		}},
 		{name: "committed symlink retargeted", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			link := filepath.Join(dir, "link")
 			if err := os.Symlink("a.txt", link); err != nil {
@@ -134,60 +200,67 @@ func testModified(t *testing.T) {
 			}
 			git(t, dir, "add", "link")
 			git(t, dir, "commit", "-q", "-m", "link")
-			os.Remove(link)
+			remove(t, link)
 			if err := os.Symlink("b.txt", link); err != nil {
 				t.Fatal(err)
 			}
+
 			return dir
 		}},
 		{name: "intent to add", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			write(t, dir, "new.txt", "n\n")
 			git(t, dir, "add", "-N", "new.txt")
+
 			return dir
 		}},
-		{name: "merge conflict", setup: func(t *testing.T) string {
-			dir := newRepo(t)
-			git(t, dir, "switch", "-q", "-c", "other")
-			commitFile(t, dir, "a.txt", "other\n", "other")
-			git(t, dir, "switch", "-q", "main")
-			commitFile(t, dir, "a.txt", "main\n", "main")
-			gitCode(t, dir, "merge", "-q", "other")
-			return dir
-		}},
+		{name: "merge conflict", setup: mergeConflict},
 		{name: "skip-worktree entry missing on disk", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			git(t, dir, "update-index", "--skip-worktree", "a.txt")
-			os.Remove(filepath.Join(dir, "a.txt"))
+			remove(t, filepath.Join(dir, "a.txt"))
+
 			return dir
 		}},
 		{name: "submodule moved to another commit", setup: func(t *testing.T) string {
+			t.Helper()
 			super := superWithSubmodule(t)
 			commitFile(t, filepath.Join(super, "mod"), "extra.txt", "x\n", "move submodule")
+
 			return super
 		}},
 		{name: "submodule not initialized", setup: func(t *testing.T) string {
+			t.Helper()
 			super := superWithSubmodule(t)
 			clone := filepath.Join(t.TempDir(), "clone")
 			git(t, super, "clone", "-q", super, clone)
+
 			return clone
 		}},
 		{name: "submodule clean", setup: superWithSubmodule},
 		{name: "submodule with a modified file", setup: func(t *testing.T) string {
+			t.Helper()
 			super := superWithSubmodule(t)
 			write(t, filepath.Join(super, "mod"), "a.txt", "changed\n")
+
 			return super
 		}},
 		{name: "submodule with a staged file", setup: func(t *testing.T) string {
+			t.Helper()
 			super := superWithSubmodule(t)
 			mod := filepath.Join(super, "mod")
 			write(t, mod, "staged.txt", "s\n")
 			git(t, mod, "add", "staged.txt")
+
 			return super
 		}},
 		{name: "submodule with an untracked file", setup: func(t *testing.T) string {
+			t.Helper()
 			super := superWithSubmodule(t)
 			write(t, filepath.Join(super, "mod"), "untracked.txt", "u\n")
+
 			return super
 		}},
 	}
@@ -221,6 +294,7 @@ func ourStaged(t *testing.T, dir string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return got
 }
 
@@ -236,12 +310,14 @@ func cacheTreeValid(t *testing.T, dir string) bool {
 	if root == nil {
 		return false
 	}
+
 	return root.Entries == len(idx.Entries) && root.ID.String() == git(t, dir, "rev-parse", "HEAD^{tree}")
 }
 
 func TestStaged(t *testing.T) { forEachFormat(t, testStaged) }
 
 func testStaged(t *testing.T) {
+	t.Helper()
 	tests := []struct {
 		name      string
 		setup     func(t *testing.T) string
@@ -249,73 +325,85 @@ func testStaged(t *testing.T) {
 	}{
 		{name: "clean after commit (cache-tree valid)", setup: newRepo, wantCache: ptr(true)},
 		{name: "staged add", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			write(t, dir, "b.txt", "b\n")
 			git(t, dir, "add", "b.txt")
+
 			return dir
 		}, wantCache: ptr(false)},
 		{name: "staged modify", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			write(t, dir, "a.txt", "changed\n")
 			git(t, dir, "add", "a.txt")
+
 			return dir
 		}},
 		{name: "staged delete", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			git(t, dir, "rm", "-q", "a.txt")
+
 			return dir
 		}},
 		{name: "staged mode change", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			git(t, dir, "update-index", "--chmod=+x", "a.txt")
+
 			return dir
 		}},
 		{name: "unstaged edit only", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			write(t, dir, "a.txt", "changed\n")
+
 			return dir
 		}},
 		{name: "re-added unchanged file invalidates cache-tree", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			commitFile(t, dir, "sub/c.txt", "c\n", "nested")
 			write(t, dir, "sub/c.txt", "c\n")
 			git(t, dir, "add", "sub/c.txt")
+
 			return dir
 		}},
 		{name: "intent to add only", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			write(t, dir, "new.txt", "n\n")
 			git(t, dir, "add", "-N", "new.txt")
+
 			return dir
 		}},
 		{name: "unborn with entries", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := t.TempDir()
 			git(t, dir, "init", "-q")
 			write(t, dir, "a.txt", "a\n")
 			git(t, dir, "add", "a.txt")
+
 			return dir
 		}},
 		{name: "unborn without entries", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := t.TempDir()
 			git(t, dir, "init", "-q")
+
 			return dir
 		}},
 		{name: "unborn with intent to add only", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := t.TempDir()
 			git(t, dir, "init", "-q")
 			write(t, dir, "a.txt", "a\n")
 			git(t, dir, "add", "-N", "a.txt")
+
 			return dir
 		}},
-		{name: "merge conflict", setup: func(t *testing.T) string {
-			dir := newRepo(t)
-			git(t, dir, "switch", "-q", "-c", "other")
-			commitFile(t, dir, "a.txt", "other\n", "other")
-			git(t, dir, "switch", "-q", "main")
-			commitFile(t, dir, "a.txt", "main\n", "main")
-			gitCode(t, dir, "merge", "-q", "other")
-			return dir
-		}},
+		{name: "merge conflict", setup: mergeConflict},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -355,12 +443,14 @@ func ourUntracked(t *testing.T, dir string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return got
 }
 
 func TestUntracked(t *testing.T) { forEachFormat(t, testUntracked) }
 
 func testUntracked(t *testing.T) {
+	t.Helper()
 	tests := []struct {
 		name  string
 		setup func(t *testing.T) string
@@ -368,65 +458,85 @@ func testUntracked(t *testing.T) {
 	}{
 		{name: "none", setup: newRepo},
 		{name: "file at root", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			write(t, dir, "new.txt", "n\n")
+
 			return dir
 		}},
 		{name: "file in a tracked dir", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			commitFile(t, dir, "src/main.go", "package main\n", "src")
 			write(t, dir, "src/extra.go", "package main\n")
+
 			return dir
 		}},
 		{name: "file in a new dir", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			write(t, dir, "fresh/deep/file.txt", "f\n")
+
 			return dir
 		}},
 		{name: "empty untracked dir", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
-			os.MkdirAll(filepath.Join(dir, "empty", "nested"), 0o755)
+			mkdirAll(t, filepath.Join(dir, "empty", "nested"))
+
 			return dir
 		}},
 		{name: "ignored file only", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			commitFile(t, dir, ".gitignore", "*.log\n", "ignore")
 			write(t, dir, "x.log", "l\n")
+
 			return dir
 		}},
 		{name: "re-include under an ignored dir stays ignored", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			commitFile(t, dir, ".gitignore", "build/\n!build/keep.txt\n", "ignore")
 			write(t, dir, "build/keep.txt", "k\n")
+
 			return dir
 		}},
 		{name: "nested repository", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			nested := filepath.Join(dir, "nested")
-			os.MkdirAll(nested, 0o755)
+			mkdirAll(t, nested)
 			git(t, nested, "init", "-q")
+
 			return dir
 		}},
 		{name: "symlink to a dir", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			if err := os.Symlink(t.TempDir(), filepath.Join(dir, "linkdir")); err != nil {
 				t.Fatal(err)
 			}
+
 			return dir
 		}},
 		{name: "globally ignored marker file", setup: func(t *testing.T) string {
+			t.Helper()
 			home := isolatedHome(t)
 			write(t, home, ".config/git/ignore", ".ignore\n")
 			dir := newRepo(t)
 			write(t, dir, ".ignore", "")
+
 			return dir
 		}},
 		{name: "case-renamed file with core.ignorecase", setup: func(t *testing.T) string {
+			t.Helper()
 			dir := newRepo(t)
 			git(t, dir, "config", "core.ignorecase", "true")
 			if err := os.Rename(filepath.Join(dir, "a.txt"), filepath.Join(dir, "A.txt")); err != nil {
 				t.Fatal(err)
 			}
+
 			return dir
 		}},
 		{name: "submodule is not untracked", setup: superWithSubmodule},
@@ -448,34 +558,43 @@ func testUntracked(t *testing.T) {
 
 func TestStashed(t *testing.T) { forEachFormat(t, testStashed) }
 
-func testStashed(t *testing.T) {
-	stash := func(t *testing.T) string {
-		dir := newRepo(t)
-		write(t, dir, "a.txt", "wip\n")
-		// git 2.43 cannot stash in a SHA-256 repository; refs/stash existing
-		// is all stashed() checks, so create the ref directly there.
-		if _, code := gitCode(t, dir, "stash", "-q"); code != 0 {
-			git(t, dir, "update-ref", "refs/stash", "HEAD")
-		}
-		return dir
+// stashedRepo returns a repository with refs/stash, loose.
+func stashedRepo(t *testing.T) string {
+	t.Helper()
+	dir := newRepo(t)
+	write(t, dir, "a.txt", "wip\n")
+	// git 2.43 cannot stash in a SHA-256 repository; refs/stash existing
+	// is all stashed() checks, so create the ref directly there.
+	if _, code := gitCode(t, dir, "stash", "-q"); code != 0 {
+		git(t, dir, "update-ref", "refs/stash", "HEAD")
 	}
+
+	return dir
+}
+
+func testStashed(t *testing.T) {
+	t.Helper()
 	tests := []struct {
 		name  string
 		setup func(t *testing.T) string
 	}{
 		{"no stash", newRepo},
-		{"loose stash ref", stash},
+		{"loose stash ref", stashedRepo},
 		{"packed stash ref", func(t *testing.T) string {
-			dir := stash(t)
+			t.Helper()
+			dir := stashedRepo(t)
 			git(t, dir, "pack-refs", "--all")
 			if _, err := os.Stat(filepath.Join(dir, ".git", "refs", "stash")); err == nil {
 				t.Fatal("fixture: refs/stash still loose after pack-refs")
 			}
+
 			return dir
 		}},
 		{"stash cleared", func(t *testing.T) string {
-			dir := stash(t)
+			t.Helper()
+			dir := stashedRepo(t)
 			git(t, dir, "stash", "clear")
+
 			return dir
 		}},
 	}
@@ -502,5 +621,6 @@ func superWithSubmodule(t *testing.T) string {
 	super := newRepo(t)
 	git(t, super, "submodule", "add", "-q", sub, "mod")
 	git(t, super, "commit", "-q", "-m", "add submodule")
+
 	return super
 }

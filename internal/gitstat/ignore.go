@@ -27,30 +27,9 @@ func LoadExcludes() (*Excludes, error) {
 		xdg = filepath.Join(home, ".config")
 	}
 
-	var files []string
-	if os.Getenv("GIT_CONFIG_NOSYSTEM") == "" {
-		files = append(files, "/etc/gitconfig")
-	}
-	if g := os.Getenv("GIT_CONFIG_GLOBAL"); g != "" {
-		files = append(files, g)
-	} else {
-		if xdg != "" {
-			files = append(files, filepath.Join(xdg, "git", "config"))
-		}
-		if home != "" {
-			files = append(files, filepath.Join(home, ".gitconfig"))
-		}
-	}
-
-	var path string
-	for _, f := range files {
-		cfg, err := gitrepo.ReadConfigFile(f)
-		if err != nil {
-			return nil, err
-		}
-		if v, _ := cfg.Get("core", "", "excludesfile"); v != "" {
-			path = v
-		}
+	path, err := excludesFileSetting(globalConfigFiles(home, xdg))
+	if err != nil {
+		return nil, err
 	}
 	if path == "" && xdg != "" {
 		path = filepath.Join(xdg, "git", "ignore")
@@ -65,7 +44,45 @@ func LoadExcludes() (*Excludes, error) {
 		}
 		ex.patterns = ps
 	}
+
 	return ex, nil
+}
+
+// globalConfigFiles lists the config files LoadExcludes reads, lowest
+// precedence first.
+func globalConfigFiles(home, xdg string) []string {
+	var files []string
+	if os.Getenv("GIT_CONFIG_NOSYSTEM") == "" {
+		files = append(files, "/etc/gitconfig")
+	}
+	if g := os.Getenv("GIT_CONFIG_GLOBAL"); g != "" {
+		return append(files, g)
+	}
+	if xdg != "" {
+		files = append(files, filepath.Join(xdg, "git", "config"))
+	}
+	if home != "" {
+		files = append(files, filepath.Join(home, ".gitconfig"))
+	}
+
+	return files
+}
+
+// excludesFileSetting returns core.excludesFile from the last of files that
+// sets it, or "" when none does.
+func excludesFileSetting(files []string) (string, error) {
+	var path string
+	for _, f := range files {
+		cfg, err := gitrepo.ReadConfigFile(f)
+		if err != nil {
+			return "", err
+		}
+		if v, _ := cfg.Get("core", "", "excludesfile"); v != "" {
+			path = v
+		}
+	}
+
+	return path, nil
 }
 
 // gitHome is the directory git expands ~ to: $HOME on every platform. When
@@ -77,6 +94,7 @@ func gitHome() string {
 		return h
 	}
 	h, _ := os.UserHomeDir()
+
 	return h
 }
 
@@ -84,6 +102,7 @@ func expandHome(p, home string) string {
 	if home != "" && (p == "~" || strings.HasPrefix(p, "~/")) {
 		return filepath.Join(home, strings.TrimPrefix(p, "~"))
 	}
+
 	return p
 }
 
@@ -121,6 +140,7 @@ func (r *Repo) rootIgnores(ex *Excludes) (ignoreStack, error) {
 	}
 	all := make([]gitrepo.Pattern, 0, len(ps)+len(info))
 	all = append(append(all, ps...), info...)
+
 	return ignoreStack{patterns: all, ignoreCase: cfg.Bool("core", "", "ignorecase", false)}, nil
 }
 
@@ -141,6 +161,7 @@ func (s ignoreStack) push(dirAbs string, domain []string) (ignoreStack, error) {
 	}
 	all := make([]gitrepo.Pattern, 0, len(s.patterns)+len(ps))
 	all = append(append(all, s.patterns...), ps...)
+
 	return ignoreStack{patterns: all, ignoreCase: s.ignoreCase}, nil
 }
 

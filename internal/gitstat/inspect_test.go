@@ -15,11 +15,34 @@ func inspectOpts(t *testing.T) Options {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return Options{
 		CheckUntracked: true,
 		CheckStash:     true,
-		MainBranches:   []string{"main", "master", "trunk"},
+		MainBranches:   testMainBranches,
 		Excludes:       ex,
+	}
+}
+
+// wantCounts fails the test unless tr holds the counts
+// `git rev-list --left-right --count a...b` prints.
+func wantCounts(t *testing.T, dir, what string, tr *Tracking, a, b string) {
+	t.Helper()
+	if tr == nil {
+		t.Errorf("%s = nil, want counts for %s...%s", what, a, b)
+
+		return
+	}
+	if got, want := countsOf(tr), revListCounts(t, dir, a, b); got != want {
+		t.Errorf("%s = %q, git says %q", what, got, want)
+	}
+}
+
+// wantStageErr fails the test unless res.Err is prefixed with stage.
+func wantStageErr(t *testing.T, res Result, stage string) {
+	t.Helper()
+	if res.Err == nil || !strings.HasPrefix(res.Err.Error(), stage+":") {
+		t.Errorf("Err = %v, want a %s: error", res.Err, stage)
 	}
 }
 
@@ -49,18 +72,15 @@ func TestInspect_AllFields(t *testing.T) {
 	if res.Status != want {
 		t.Errorf("Status = %+v, want %+v", res.Status, want)
 	}
-	if res.Upstream == nil || res.Upstream.Ref != "origin/feature" || countsOf(res.Upstream) != git(t, clone, "rev-list", "--left-right", "--count", "HEAD...@{u}") {
+	if res.Upstream == nil || res.Upstream.Ref != "origin/feature" {
 		t.Errorf("Upstream = %+v", res.Upstream)
 	}
-	if res.Default == nil || res.Default.Name != "main" {
+	wantCounts(t, clone, "Upstream", res.Upstream, "HEAD", "@{u}")
+	if res.Default == nil || res.Default.Name != mainBranch {
 		t.Fatalf("Default = %+v", res.Default)
 	}
-	if got, want := countsOf(res.Default.Versus), git(t, clone, "rev-list", "--left-right", "--count", "HEAD...origin/main"); got != want {
-		t.Errorf("Versus = %q, git says %q", got, want)
-	}
-	if got, want := countsOf(res.Default.Local), git(t, clone, "rev-list", "--left-right", "--count", "main...origin/main"); got != want {
-		t.Errorf("Local = %q, git says %q", got, want)
-	}
+	wantCounts(t, clone, "Versus", res.Default.Versus, "HEAD", "origin/main")
+	wantCounts(t, clone, "Local", res.Default.Local, mainBranch, "origin/main")
 	if !res.Dirty() {
 		t.Error("Dirty() = false")
 	}
@@ -125,41 +145,33 @@ func TestInspect_Errors(t *testing.T) {
 		git(t, dir, "sparse-checkout", "init", "--cone", "--sparse-index")
 		git(t, dir, "sparse-checkout", "set", "A")
 		res := Inspect(context.Background(), dir, inspectOpts(t))
-		if res.Err == nil || !strings.Contains(res.Err.Error(), `"sdir"`) || !strings.HasPrefix(res.Err.Error(), "index:") {
-			t.Errorf("Err = %v, want an index: unsupported extension \"sdir\" error", res.Err)
+		wantStageErr(t, res, "index")
+		if res.Err == nil || !strings.Contains(res.Err.Error(), `"sdir"`) {
+			t.Errorf("Err = %v, want an unsupported extension \"sdir\" error", res.Err)
 		}
-		if res.Head.Branch != "main" {
+		if res.Head.Branch != mainBranch {
 			t.Errorf("Head before the failing stage lost: %+v", res.Head)
 		}
 	})
 	t.Run("corrupted HEAD", func(t *testing.T) {
 		dir := newRepo(t)
 		write(t, dir, ".git/HEAD", "garbage\n")
-		res := Inspect(context.Background(), dir, inspectOpts(t))
-		if res.Err == nil || !strings.HasPrefix(res.Err.Error(), "head:") {
-			t.Errorf("Err = %v, want a head: error", res.Err)
-		}
+		wantStageErr(t, Inspect(context.Background(), dir, inspectOpts(t)), "head")
 	})
 	t.Run("HEAD names a missing commit", func(t *testing.T) {
 		dir := newRepo(t)
 		write(t, dir, ".git/HEAD", strings.Repeat("ab", 20)+"\n")
-		res := Inspect(context.Background(), dir, inspectOpts(t))
-		if res.Err == nil || !strings.HasPrefix(res.Err.Error(), "head:") {
-			t.Errorf("Err = %v, want a head: error", res.Err)
-		}
+		wantStageErr(t, Inspect(context.Background(), dir, inspectOpts(t)), "head")
 	})
 	t.Run("not a repository", func(t *testing.T) {
-		res := Inspect(context.Background(), t.TempDir(), inspectOpts(t))
-		if res.Err == nil || !strings.HasPrefix(res.Err.Error(), "open:") {
-			t.Errorf("Err = %v, want an open: error", res.Err)
-		}
+		wantStageErr(t, Inspect(context.Background(), t.TempDir(), inspectOpts(t)), "open")
 	})
-	t.Run("cancelled", func(t *testing.T) {
+	t.Run("canceled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		res := Inspect(ctx, newRepo(t), inspectOpts(t))
 		if res.Err == nil {
-			t.Error("Err = nil for a cancelled context")
+			t.Error("Err = nil for a canceled context")
 		}
 	})
 }
@@ -174,21 +186,14 @@ func TestInspect_ReleasesDescriptors(t *testing.T) {
 	git(t, clone, "gc", "-q")
 	git(t, clone, "commit-graph", "write", "--reachable")
 
-	countFDs := func() int {
-		entries, err := os.ReadDir("/proc/self/fd")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return len(entries)
-	}
 	opts := inspectOpts(t)
-	before := countFDs()
+	before := countFDs(t)
 	for range 300 {
 		if res := Inspect(context.Background(), clone, opts); res.Err != nil {
 			t.Fatal(res.Err)
 		}
 	}
-	if after := countFDs(); after > before {
+	if after := countFDs(t); after > before {
 		t.Errorf("descriptors leaked: %d before, %d after 300 inspections", before, after)
 	}
 }

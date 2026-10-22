@@ -23,6 +23,7 @@ func Open(path string) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &Repo{worktree: path, repo: r}, nil
 }
 
@@ -39,5 +40,6 @@ func shortRefName(name string) string {
 			return s
 		}
 	}
+
 	return name
 }
