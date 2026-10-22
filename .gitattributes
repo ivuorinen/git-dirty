@@ -1,0 +1,3 @@
+# LF in every checkout, Windows included: golden files are compared byte for
+# byte, and .editorconfig requires LF.
+* text=auto eol=lf

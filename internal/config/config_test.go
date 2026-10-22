@@ -22,6 +22,7 @@ func isolate(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir) // os.UserHomeDir on Windows
 	for _, n := range envNames {
 		t.Setenv(n, "")
 		os.Unsetenv(n)

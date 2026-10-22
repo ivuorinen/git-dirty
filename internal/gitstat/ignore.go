@@ -21,7 +21,7 @@ type Excludes struct {
 // (GIT_CONFIG_GLOBAL, else $XDG_CONFIG_HOME/git/config and ~/.gitconfig, the
 // later file winning), defaulting to $XDG_CONFIG_HOME/git/ignore.
 func LoadExcludes() (*Excludes, error) {
-	home, _ := os.UserHomeDir()
+	home := gitHome()
 	xdg := os.Getenv("XDG_CONFIG_HOME")
 	if xdg == "" && home != "" {
 		xdg = filepath.Join(home, ".config")
@@ -68,6 +68,18 @@ func LoadExcludes() (*Excludes, error) {
 	return ex, nil
 }
 
+// gitHome is the directory git expands ~ to: $HOME on every platform. When
+// HOME is unset, Git for Windows derives it from the user profile, the
+// directory os.UserHomeDir returns there (os.UserHomeDir alone would ignore a
+// HOME that Git Bash or the user set).
+func gitHome() string {
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	h, _ := os.UserHomeDir()
+	return h
+}
+
 func expandHome(p, home string) string {
 	if home != "" && (p == "~" || strings.HasPrefix(p, "~/")) {
 		return filepath.Join(home, strings.TrimPrefix(p, "~"))
@@ -89,8 +101,7 @@ func (r *Repo) rootIgnores(ex *Excludes) (ignoreStack, error) {
 	cfg := r.repo.Config
 	override := false
 	if v, _ := cfg.Get("core", "", "excludesfile"); v != "" {
-		home, _ := os.UserHomeDir()
-		path, override = expandHome(v, home), true
+		path, override = expandHome(v, gitHome()), true
 	}
 	// The shared parse covers only an absolute global path; a repository
 	// override or a relative path (git reads it from the worktree root) is

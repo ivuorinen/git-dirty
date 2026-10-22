@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"strings"
@@ -64,7 +66,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintf(stderr, "%s: %v\n", programName, err)
 		return exitError
 	}
-	if fi, err := os.Stat(cfg.Dir); err != nil {
+	if fi, err := os.Stat(cfg.Dir); errors.Is(err, fs.ErrNotExist) {
+		// The OS wording differs (Windows: "The system cannot find the file
+		// specified"), so a missing directory gets one message everywhere.
+		fmt.Fprintf(stderr, "%s: %s: no such file or directory\n", programName, cfg.Dir)
+		return exitError
+	} else if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", programName, err)
 		return exitError
 	} else if !fi.IsDir() {
