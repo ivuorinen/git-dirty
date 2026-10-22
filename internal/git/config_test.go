@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,17 @@ func gitConfigGet(t *testing.T, file, key string, all bool) ([]string, bool) {
 	return vals, true
 }
 
+// gitAtLeast reports whether the git on PATH is major.minor or newer.
+func gitAtLeast(t *testing.T, major, minor int) bool {
+	t.Helper()
+	v := strings.TrimPrefix(run(t, "", "version"), "git version ")
+	var ma, mi int
+	if _, err := fmt.Sscanf(v, "%d.%d", &ma, &mi); err != nil {
+		t.Fatalf("parse git version %q: %v", v, err)
+	}
+	return ma > major || ma == major && mi >= minor
+}
+
 func TestParseConfig_MatchesGit(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "config")
 	if err := os.WriteFile(file, []byte(configFixture), 0o644); err != nil {
@@ -82,6 +94,10 @@ func TestParseConfig_MatchesGit(t *testing.T) {
 		{"esc.semi", "esc", "", "semi"},
 	}
 	for _, k := range keys {
+		if k.gitKey == "esc.inner" && !gitAtLeast(t, 2, 45) {
+			t.Logf("skipping %s: git before 2.45 turns each whitespace character into a space", k.gitKey)
+			continue
+		}
 		want, ok := gitConfigGet(t, file, k.gitKey, false)
 		if !ok {
 			t.Fatalf("git has no %s", k.gitKey)

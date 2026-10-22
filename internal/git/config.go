@@ -286,27 +286,35 @@ func (p *configParser) variable(first byte) (key string, noValue bool, value str
 	return "", false, "", p.errorf("unexpected character %q after key %q", c, name.String())
 }
 
-// value parses after "=" up to the end of the line, like git's parse_value:
-// each whitespace character outside quotes becomes a space, and whitespace at
-// either end of the value is dropped.
+// value parses after "=" up to the end of the line, like git's parse_value
+// since git 2.45: whitespace outside quotes is kept as written, except at the
+// start of the value and before its end or a comment. (Older git turned each
+// whitespace character into a space.)
 func (p *configParser) value() (string, error) {
 	var b strings.Builder
 	quote, comment := false, false
-	spaces := 0
+	trim := -1 // length to cut back to if only whitespace follows
 	for {
 		c, ok := p.next()
 		if !ok || c == '\n' {
 			if quote {
 				return "", p.errorf("unterminated quoted value")
 			}
-			return b.String(), nil
+			s := b.String()
+			if trim >= 0 {
+				s = s[:trim]
+			}
+			return s, nil
 		}
 		if comment {
 			continue
 		}
-		if !quote && (c == ' ' || c == '\t') {
+		if !quote && isSpace(c) {
+			if trim < 0 {
+				trim = b.Len()
+			}
 			if b.Len() > 0 {
-				spaces++
+				b.WriteByte(c)
 			}
 			continue
 		}
@@ -314,9 +322,7 @@ func (p *configParser) value() (string, error) {
 			comment = true
 			continue
 		}
-		for ; spaces > 0; spaces-- {
-			b.WriteByte(' ')
-		}
+		trim = -1
 		switch c {
 		case '\\':
 			e, ok := p.next()
@@ -344,6 +350,8 @@ func (p *configParser) value() (string, error) {
 	}
 }
 
+// isSpace is C's isspace, which parse_value uses; '\n' never reaches it.
+func isSpace(c byte) bool { return c == ' ' || c >= '\t' && c <= '\r' }
 func isAlpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 func isAlnum(c byte) bool { return isAlpha(c) || c >= '0' && c <= '9' }
 func toLower(c byte) byte {
