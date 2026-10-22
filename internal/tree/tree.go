@@ -32,6 +32,7 @@ type Tree struct {
 // New returns an empty tree rooted at rootPath.
 func New(rootPath string) *Tree {
 	root := &Node{Name: rootPath, Path: rootPath}
+
 	return &Tree{root: root, nodes: map[string]*Node{"": root}}
 }
 
@@ -56,24 +57,6 @@ func (t *Tree) Add(it scan.Item) {
 	}
 }
 
-// node returns the node for rel, creating it and any missing ancestors.
-func (t *Tree) node(rel []string) *Node {
-	key := strings.Join(rel, "/")
-	if n, ok := t.nodes[key]; ok {
-		return n
-	}
-	parent := t.node(rel[:len(rel)-1])
-	n := &Node{
-		Name: rel[len(rel)-1],
-		Path: filepath.Join(parent.Path, rel[len(rel)-1]),
-		Rel:  slices.Clone(rel),
-	}
-	parent.children = append(parent.children, n)
-	parent.sorted = false
-	t.nodes[key] = n
-	return n
-}
-
 // Filter selects which nodes Lines returns.
 type Filter struct {
 	Verbose   bool // list directories without repositories too
@@ -93,7 +76,27 @@ type Line struct {
 func (t *Tree) Lines(f Filter) []Line {
 	out := []Line{{Node: t.root}} // the root line is always shown
 	t.appendChildren(&out, t.root, "", f)
+
 	return out
+}
+
+// node returns the node for rel, creating it and any missing ancestors.
+func (t *Tree) node(rel []string) *Node {
+	key := strings.Join(rel, "/")
+	if n, ok := t.nodes[key]; ok {
+		return n
+	}
+	parent := t.node(rel[:len(rel)-1])
+	n := &Node{
+		Name: rel[len(rel)-1],
+		Path: filepath.Join(parent.Path, rel[len(rel)-1]),
+		Rel:  slices.Clone(rel),
+	}
+	parent.children = append(parent.children, n)
+	parent.sorted = false
+	t.nodes[key] = n
+
+	return n
 }
 
 func (t *Tree) appendChildren(out *[]Line, n *Node, indent string, f Filter) {
@@ -129,5 +132,6 @@ func (t *Tree) visible(n *Node, f Filter) bool {
 			return true
 		}
 	}
+
 	return f.Verbose && !f.DirtyOnly && len(n.Rel) <= f.Depth
 }

@@ -24,11 +24,22 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	os.Setenv("HOME", home)
-	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for k, v := range map[string]string{
+		"HOME":                home,
+		"XDG_CONFIG_HOME":     filepath.Join(home, ".config"),
+		"GIT_CONFIG_NOSYSTEM": "1",
+	} {
+		if err := os.Setenv(k, v); err != nil {
+			panic(err)
+		}
+	}
 	code := m.Run()
-	os.RemoveAll(home)
+	if err := os.RemoveAll(home); err != nil {
+		fmt.Println("removing the test home:", err)
+		if code == 0 {
+			code = 1
+		}
+	}
 	os.Exit(code)
 }
 
@@ -36,9 +47,10 @@ func TestMain(m *testing.M) {
 func mkrepo(t *testing.T, root, rel string) {
 	t.Helper()
 	dir := filepath.Join(root, filepath.FromSlash(rel))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
+	//nolint:gosec // G204: tests run git as the oracle (CLAUDE.md)
 	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
@@ -46,7 +58,7 @@ func mkrepo(t *testing.T, root, rel string) {
 
 func mkdir(t *testing.T, root, rel string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(rel)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(rel)), 0o750); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -75,6 +87,7 @@ func collect(t *testing.T, opts Options) collected {
 	slices.Sort(c.repos)
 	slices.Sort(c.dirs)
 	slices.Sort(c.warnings)
+
 	return c
 }
 
@@ -96,11 +109,11 @@ func TestRun_FindsReposAndSkips(t *testing.T) {
 	mkrepo(t, root, "node_modules/excluded")
 	mkrepo(t, root, "custom/excluded-too")
 	mkrepo(t, root, "ignored/repo")
-	if err := os.WriteFile(filepath.Join(root, "ignored", ".ignore"), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "ignored", ".ignore"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mkrepo(t, root, "has-ignore-file")
-	if err := os.WriteFile(filepath.Join(root, "has-ignore-file", ".ignore"), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "has-ignore-file", ".ignore"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mkdir(t, root, "empty/dir")
@@ -204,7 +217,7 @@ func TestRun_ConsumerStopsReadingAfterCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := Run(ctx, baseOpts(root))
 	<-ch
-	// Let discovery fill the buffer and block on a send before cancelling.
+	// Let discovery fill the buffer and block on a send before canceling.
 	time.Sleep(200 * time.Millisecond)
 	cancel() // and never read again: senders must not block forever
 	for range 100 {

@@ -18,7 +18,11 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-const root = "/home/u/Code"
+const (
+	root       = "/home/u/Code"
+	mainBranch = "main"
+	originMain = "origin/main"
+)
 
 var someHash, _ = gitrepo.SHA1.ParseHex("1111111111111111111111111111111111111111")
 
@@ -29,6 +33,7 @@ func onBranch(name string) gitstat.Head {
 func repo(rel string, res gitstat.Result) scan.Item {
 	parts := strings.Split(rel, "/")
 	res.Path = filepath.Join(root, rel)
+
 	return scan.Item{Kind: scan.Repo, Path: res.Path, Rel: parts, Result: res}
 }
 
@@ -36,6 +41,7 @@ func dir(rel string) scan.Item {
 	if rel == "" {
 		return scan.Item{Kind: scan.Dir, Path: root}
 	}
+
 	return scan.Item{Kind: scan.Dir, Path: filepath.Join(root, rel), Rel: strings.Split(rel, "/")}
 }
 
@@ -50,48 +56,62 @@ func fixture() *tree.Tree {
 			Status:   gitstat.Status{Modified: true, Untracked: true},
 			Upstream: &gitstat.Tracking{Ref: "origin/feature/tree", Ahead: 2},
 			Default: &gitstat.DefaultBranch{
-				Name:   "main",
-				Local:  &gitstat.Tracking{Ref: "origin/main", Behind: 4},
-				Versus: &gitstat.Tracking{Ref: "origin/main", Ahead: 5, Behind: 1},
+				Name:   mainBranch,
+				Local:  &gitstat.Tracking{Ref: originMain, Behind: 4},
+				Versus: &gitstat.Tracking{Ref: originMain, Ahead: 5, Behind: 1},
 			},
 		}),
-		repo("ivuorinen/dotfiles", gitstat.Result{Head: onBranch("main"), Upstream: &gitstat.Tracking{Ref: "origin/main", Behind: 3}}),
-		repo("ivuorinen/gh-history", gitstat.Result{Head: onBranch("main"), Upstream: &gitstat.Tracking{Ref: "origin/main", Ahead: 1}}),
-		repo("ivuorinen/broken", gitstat.Result{Head: onBranch("main"), Err: errors.New("index: unknown extension\nsecond line")}),
+		repo("ivuorinen/dotfiles", gitstat.Result{
+			Head:     onBranch(mainBranch),
+			Upstream: &gitstat.Tracking{Ref: originMain, Behind: 3},
+		}),
+		repo("ivuorinen/gh-history", gitstat.Result{
+			Head:     onBranch(mainBranch),
+			Upstream: &gitstat.Tracking{Ref: originMain, Ahead: 1},
+		}),
+		repo("ivuorinen/broken", gitstat.Result{
+			Head: onBranch(mainBranch),
+			Err:  errors.New("index: unknown extension\nsecond line"),
+		}),
 		repo("scratch", gitstat.Result{
 			Head:    onBranch("wip"),
-			Default: &gitstat.DefaultBranch{Name: "main", Versus: &gitstat.Tracking{Ref: "main"}},
+			Default: &gitstat.DefaultBranch{Name: mainBranch, Versus: &gitstat.Tracking{Ref: mainBranch}},
 		}),
-		repo("gone", gitstat.Result{Head: onBranch("feat"), Upstream: &gitstat.Tracking{Gone: true}, Status: gitstat.Status{Stashed: true, Staged: true}}),
+		repo("gone", gitstat.Result{
+			Head:     onBranch("feat"),
+			Upstream: &gitstat.Tracking{Gone: true},
+			Status:   gitstat.Status{Stashed: true, Staged: true},
+		}),
 		repo("tagged", gitstat.Result{Head: gitstat.Head{Label: "v1.0", Hash: someHash}}),
-		repo("fresh", gitstat.Result{Head: gitstat.Head{Branch: "main", Label: "main", Unborn: true}}),
+		repo("fresh", gitstat.Result{Head: gitstat.Head{Branch: mainBranch, Label: mainBranch, Unborn: true}}),
 		dir("empty"),
 		dir("deep"),
 		dir("deep/a"),
 		dir("deep/a/b"),
-		repo("a\x1b[2Jb", gitstat.Result{Head: onBranch("main")}),
+		repo("a\x1b[2Jb", gitstat.Result{Head: onBranch(mainBranch)}),
 	} {
 		t.Add(it)
 	}
+
 	return t
 }
 
 func baseOptions() Options {
-	return Options{ShowBranch: true, Truncate: true, MainBranches: []string{"main", "master", "trunk"}}
+	return Options{ShowBranch: true, Truncate: true, MainBranches: []string{mainBranch, "master", "trunk"}}
 }
 
 func golden(t *testing.T, name string, got []byte) {
 	t.Helper()
 	path := filepath.Join("testdata", name+".golden")
 	if *update {
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
+		if err := os.MkdirAll("testdata", 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, got, 0o644); err != nil {
+		if err := os.WriteFile(path, got, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want, err := os.ReadFile(path)
+	want, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		t.Fatalf("%v (run with -update to create)", err)
 	}
@@ -120,7 +140,15 @@ func TestWritePlain_Golden(t *testing.T) {
 			}
 			tr := fixture()
 			var buf bytes.Buffer
-			if err := WritePlain(&buf, root, tr.Lines(tt.filter), tr.Repos(), 210*time.Millisecond, o, false); err != nil {
+			if err := WritePlain(
+				&buf,
+				root,
+				tr.Lines(tt.filter),
+				tr.Repos(),
+				210*time.Millisecond,
+				o,
+				false,
+			); err != nil {
 				t.Fatal(err)
 			}
 			if bytes.Contains(buf.Bytes(), []byte("\x1b")) {
@@ -134,17 +162,31 @@ func TestWritePlain_Golden(t *testing.T) {
 func TestWritePlain_ColorOn(t *testing.T) {
 	tr := fixture()
 	var buf bytes.Buffer
-	if err := WritePlain(&buf, root, tr.Lines(tree.Filter{}), tr.Repos(), time.Second, baseOptions(), true); err != nil {
+	if err := WritePlain(
+		&buf,
+		root,
+		tr.Lines(tree.Filter{}),
+		tr.Repos(),
+		time.Second,
+		baseOptions(),
+		true,
+	); err != nil {
 		t.Fatal(err)
 	}
-	for _, code := range []string{"\x1b[32m" + IconClean, "\x1b[31m" + IconDirty, "\x1b[33m[M?]", "\x1b[35m(feature/tree ↑2)"} {
+	for _, code := range []string{
+		"\x1b[32m" + IconClean,
+		"\x1b[31m" + IconDirty,
+		"\x1b[33m[M?]",
+		"\x1b[35m(feature/tree ↑2)",
+	} {
 		if !strings.Contains(buf.String(), code) {
 			t.Errorf("colored output lacks %q", code)
 		}
 	}
 	// The only escape sequences are the ones the renderer writes: the
 	// sanitized directory name must not contribute a raw ESC.
-	stripped := strings.NewReplacer("\x1b[0m", "", "\x1b[31m", "", "\x1b[32m", "", "\x1b[33m", "", "\x1b[35m", "").Replace(buf.String())
+	stripped := strings.NewReplacer("\x1b[0m", "", "\x1b[31m", "", "\x1b[32m", "", "\x1b[33m", "", "\x1b[35m", "").
+		Replace(buf.String())
 	if strings.Contains(stripped, "\x1b") {
 		t.Error("raw escape byte from repository data reached the output")
 	}

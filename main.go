@@ -45,63 +45,99 @@ func main() {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", programName, err)
+		printf(stderr, "%s: %v\n", programName, err)
+
 		return exitError
 	}
 	opts, err := parseArgs(args, cfg)
 	if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\nRun '%s -h' for usage.\n", programName, err, programName)
+		printf(stderr, "%s: %v\nRun '%s -h' for usage.\n", programName, err, programName)
+
 		return exitUsage
 	}
 	switch {
 	case opts.help:
 		writeHelp(stdout, cfg)
+
 		return exitOK
 	case opts.version:
-		fmt.Fprintln(stdout, version)
+		printf(stdout, "%s\n", version)
+
 		return exitOK
 	}
 	cfg = opts.cfg
 	if err := cfg.Normalize(); err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", programName, err)
+		printf(stderr, "%s: %v\n", programName, err)
+
 		return exitError
 	}
-	if fi, err := os.Stat(cfg.Dir); errors.Is(err, fs.ErrNotExist) {
-		// The OS wording differs (Windows: "The system cannot find the file
-		// specified"), so a missing directory gets one message everywhere.
-		fmt.Fprintf(stderr, "%s: %s: no such file or directory\n", programName, cfg.Dir)
-		return exitError
-	} else if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", programName, err)
-		return exitError
-	} else if !fi.IsDir() {
-		fmt.Fprintf(stderr, "%s: %s: not a directory\n", programName, cfg.Dir)
+	if err := checkDir(cfg.Dir); err != nil {
+		printf(stderr, "%s: %v\n", programName, err)
+
 		return exitError
 	}
 	ex, err := gitstat.LoadExcludes()
 	if err != nil {
-		fmt.Fprintf(stderr, "%s: git ignore configuration: %v\n", programName, err)
+		printf(stderr, "%s: git ignore configuration: %v\n", programName, err)
+
 		return exitError
 	}
-	term := os.Getenv("TERM")
-	if useTUI(cfg.Interactive, term, isTerminal(stdin), isTerminal(stdout)) {
-		err := tui.Run(ctx, tui.Config{
-			Root:   cfg.Dir,
-			Scan:   scanOptions(cfg, ex),
-			Render: renderOptions(cfg),
-			Filter: tree.Filter{Verbose: cfg.Verbose, Depth: cfg.Depth},
-			Color:  cfg.Color,
-		}, stdin, stdout)
-		if err != nil && ctx.Err() == nil {
-			fmt.Fprintf(stderr, "%s: %v\n", programName, err)
-			return exitError
-		}
-		if ctx.Err() != nil {
-			return exitSignal
-		}
-		return exitOK
+	if useTUI(cfg.Interactive, os.Getenv("TERM"), isTerminal(stdin), isTerminal(stdout)) {
+		return runTUI(ctx, cfg, ex, stdin, stdout, stderr)
 	}
+
 	return runPlain(ctx, cfg, scanOptions(cfg, ex), stdout, stderr)
+}
+
+// printf writes to stdout or stderr. A failed write to either has nowhere
+// left to be reported, so the error is dropped here rather than at each call.
+func printf(w io.Writer, format string, a ...any) {
+	_, _ = fmt.Fprintf(w, format, a...)
+}
+
+// checkDir reports a scan root that is missing or not a directory.
+func checkDir(dir string) error {
+	fi, err := os.Stat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// The OS wording differs (Windows: "The system cannot find the file
+		// specified"), so a missing directory gets one message everywhere.
+		return fmt.Errorf("%s: no such file or directory", dir)
+	case err != nil:
+		return err
+	case !fi.IsDir():
+		return fmt.Errorf("%s: not a directory", dir)
+	default:
+		return nil
+	}
+}
+
+// runTUI shows the interactive browser until the user quits or a signal
+// arrives.
+func runTUI(
+	ctx context.Context,
+	cfg config.Config,
+	ex *gitstat.Excludes,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) int {
+	err := tui.Run(ctx, tui.Config{
+		Root:   cfg.Dir,
+		Scan:   scanOptions(cfg, ex),
+		Render: renderOptions(cfg),
+		Filter: tree.Filter{Verbose: cfg.Verbose, Depth: cfg.Depth},
+		Color:  cfg.Color,
+	}, stdin, stdout)
+	if ctx.Err() != nil {
+		return exitSignal
+	}
+	if err != nil {
+		printf(stderr, "%s: %v\n", programName, err)
+
+		return exitError
+	}
+
+	return exitOK
 }
 
 // useTUI picks the interactive view: wanted (not --plain), both stdin and
@@ -133,42 +169,74 @@ func renderOptions(cfg config.Config) render.Options {
 func runPlain(ctx context.Context, cfg config.Config, so scan.Options, stdout, stderr io.Writer) int {
 	start := time.Now()
 	t := tree.New(cfg.Dir)
-	progress := isTerminal(stderr)
-	found := 0
-	clearLine := func() {
-		if progress {
-			fmt.Fprint(stderr, "\r\x1b[K")
-		}
-	}
+	p := progress{w: stderr, verbose: cfg.Verbose, counter: isTerminal(stderr)}
 	for it := range scan.Run(ctx, so) {
-		switch {
-		case it.Kind == scan.Warning && cfg.Verbose:
-			clearLine()
-			fmt.Fprintf(stderr, "%s: %s: %s\n", programName, render.Sanitize(it.Path), it.Message)
-		case it.Kind == scan.Repo:
-			found++
-			if cfg.Verbose && it.Result.Err != nil {
-				clearLine()
-				fmt.Fprintf(stderr, "%s: %s: %s\n", programName, render.Sanitize(it.Path), render.Sanitize(it.Result.Err.Error()))
-			}
-			if progress {
-				fmt.Fprintf(stderr, "\rFound %d git repositories...", found)
-			}
-		}
+		p.report(it)
 		t.Add(it)
 	}
-	clearLine()
+	p.clearLine()
 	if ctx.Err() != nil {
-		fmt.Fprintf(stderr, "%s: interrupted\n", programName)
+		printf(stderr, "%s: interrupted\n", programName)
+
 		return exitSignal
 	}
 	filter := tree.Filter{Verbose: cfg.Verbose, Depth: cfg.Depth}
 	color := cfg.Color && isTerminal(stdout) && os.Getenv("TERM") != "dumb"
-	if err := render.WritePlain(stdout, cfg.Dir, t.Lines(filter), t.Repos(), time.Since(start), renderOptions(cfg), color); err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", programName, err)
+	if err := render.WritePlain(
+		stdout,
+		cfg.Dir,
+		t.Lines(filter),
+		t.Repos(),
+		time.Since(start),
+		renderOptions(cfg),
+		color,
+	); err != nil {
+		printf(stderr, "%s: %v\n", programName, err)
+
 		return exitError
 	}
+
 	return exitOK
+}
+
+// progress reports a plain-mode scan on stderr: warnings and inspection
+// errors with -v, and a repository counter when stderr is a terminal.
+type progress struct {
+	w       io.Writer
+	verbose bool
+	counter bool
+	found   int
+}
+
+// report prints what it shows about one scan item.
+func (p *progress) report(it scan.Item) {
+	switch {
+	case it.Kind == scan.Warning && p.verbose:
+		p.clearLine()
+		printf(p.w, "%s: %s: %s\n", programName, render.Sanitize(it.Path), it.Message)
+	case it.Kind == scan.Repo:
+		p.found++
+		if p.verbose && it.Result.Err != nil {
+			p.clearLine()
+			printf(
+				p.w,
+				"%s: %s: %s\n",
+				programName,
+				render.Sanitize(it.Path),
+				render.Sanitize(it.Result.Err.Error()),
+			)
+		}
+		if p.counter {
+			printf(p.w, "\rFound %d git repositories...", p.found)
+		}
+	}
+}
+
+// clearLine erases the counter so another message can start the line.
+func (p *progress) clearLine() {
+	if p.counter {
+		printf(p.w, "\r\x1b[K")
+	}
 }
 
 // isTerminal reports whether w is a character device such as a terminal.
@@ -178,6 +246,7 @@ func isTerminal(w any) bool {
 		return false
 	}
 	fi, err := f.Stat()
+
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
@@ -212,16 +281,19 @@ func expandShortFlags(args []string) []string {
 		}
 		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
 			out = append(out, arg)
+
 			continue
 		}
 		name, _, _ := strings.Cut(arg[1:], "=")
 		if longNames[name] {
 			out = append(out, arg)
+
 			continue
 		}
 		expanded, takesNext, ok := expandCluster(arg[1:])
 		if !ok {
 			out = append(out, arg) // let flag report the unknown letter
+
 			continue
 		}
 		out = append(out, expanded...)
@@ -230,6 +302,7 @@ func expandShortFlags(args []string) []string {
 			out = append(out, args[i])
 		}
 	}
+
 	return out
 }
 
@@ -246,11 +319,13 @@ func expandCluster(letters string) (expanded []string, takesNext, ok bool) {
 			if rest == "" {
 				return expanded, true, true
 			}
+
 			return append(expanded, rest), false, true
 		default:
 			return nil, false, false
 		}
 	}
+
 	return expanded, false, true
 }
 
@@ -266,6 +341,7 @@ func (e excludeValue) Set(s string) error {
 			*e.list = append(*e.list, item)
 		}
 	}
+
 	return nil
 }
 
@@ -283,15 +359,32 @@ func parseArgs(args []string, cfg config.Config) (options, error) {
 	fs.Bool("p", false, "") // accepted for compatibility; always parallel
 	fs.BoolFunc("a", "", func(string) error {
 		c.CheckStash, c.CheckUntracked = true, true
+
 		return nil
 	})
-	fs.BoolFunc("c", "", func(string) error { c.Color = !c.Color; return nil })
-	fs.BoolFunc("t", "", func(string) error { c.Truncate = !c.Truncate; return nil })
-	fs.BoolFunc("b", "", func(string) error { c.ShowBranch = !c.ShowBranch; return nil })
+	fs.BoolFunc("c", "", func(string) error {
+		c.Color = !c.Color
+
+		return nil
+	})
+	fs.BoolFunc("t", "", func(string) error {
+		c.Truncate = !c.Truncate
+
+		return nil
+	})
+	fs.BoolFunc("b", "", func(string) error {
+		c.ShowBranch = !c.ShowBranch
+
+		return nil
+	})
 	fs.IntVar(&c.Depth, "d", c.Depth, "")
 	fs.IntVar(&c.MaxDepth, "m", c.MaxDepth, "")
 	fs.Var(excludeValue{&c.Exclude}, "e", "")
-	fs.BoolFunc("plain", "", func(string) error { c.Interactive = false; return nil })
+	fs.BoolFunc("plain", "", func(string) error {
+		c.Interactive = false
+
+		return nil
+	})
 	fs.BoolVar(&opts.version, "version", false, "")
 
 	args = expandShortFlags(args)
@@ -299,6 +392,7 @@ func parseArgs(args []string, cfg config.Config) (options, error) {
 	for i, a := range args {
 		if a == "--" {
 			args, rest = args[:i], args[i+1:]
+
 			break
 		}
 	}
@@ -327,6 +421,7 @@ func parseArgs(args []string, cfg config.Config) (options, error) {
 		return opts, fmt.Errorf("expected at most one directory, got %d: %s",
 			len(positional), strings.Join(positional, " "))
 	}
+
 	return opts, nil
 }
 
@@ -334,6 +429,7 @@ func onOff(b bool) string {
 	if b {
 		return "on"
 	}
+
 	return "off"
 }
 
@@ -375,5 +471,15 @@ func writeHelp(w io.Writer, cfg config.Config) {
 		"Example:\n" +
 		"  %[1]s ~/Projects\n" +
 		"  %[1]s -d 3 -e 'build,dist' ~/Code\n"
-	fmt.Fprintf(w, help, programName, cfg.Depth, cfg.MaxDepth, onOff(cfg.Color), onOff(cfg.Truncate), onOff(cfg.ShowBranch), path)
+	printf(
+		w,
+		help,
+		programName,
+		cfg.Depth,
+		cfg.MaxDepth,
+		onOff(cfg.Color),
+		onOff(cfg.Truncate),
+		onOff(cfg.ShowBranch),
+		path,
+	)
 }

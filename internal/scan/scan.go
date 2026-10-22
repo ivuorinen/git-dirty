@@ -26,6 +26,7 @@ type Options struct {
 // Kind tells what an Item describes.
 type Kind int
 
+// Item kinds.
 const (
 	Dir     Kind = iota // a directory that is not a working tree
 	Repo                // an inspected working tree; Result is set
@@ -43,7 +44,7 @@ type Item struct {
 }
 
 // Run scans in the background and returns the event stream, closed when the
-// scan finishes or ctx is cancelled. Directories are reported as they are
+// scan finishes or ctx is canceled. Directories are reported as they are
 // discovered; repositories as their inspections complete, in any order.
 func Run(ctx context.Context, opts Options) <-chan Item {
 	out := make(chan Item, 64)
@@ -78,10 +79,11 @@ func Run(ctx context.Context, opts Options) <-chan Item {
 		wg.Wait()
 		close(out)
 	}()
+
 	return out
 }
 
-// send delivers it unless ctx is cancelled first.
+// send delivers it unless ctx is canceled first.
 func send(ctx context.Context, ch chan<- Item, it Item) bool {
 	select {
 	case ch <- it:
@@ -120,31 +122,38 @@ func (d *discoverer) walk(dir string, rel []string) bool {
 		if !e.IsDir() { // files, and symlinks even to directories
 			continue
 		}
-		name := e.Name()
-		child := filepath.Join(dir, name)
-		childRel := append(rel[:len(rel):len(rel)], name)
-		switch {
-		case slices.Contains(d.opts.Exclude, name):
-			if !d.warn(child, childRel, "skipped: excluded name") {
-				return false
-			}
-			continue
-		case exists(filepath.Join(child, ".ignore")):
-			if !d.warn(child, childRel, "skipped: contains .ignore") {
-				return false
-			}
-			continue
-		case len(childRel) > d.opts.MaxDepth:
-			if !d.warn(child, childRel, "skipped: maximum depth reached") {
-				return false
-			}
-			continue
-		}
-		if !d.walk(child, childRel) {
+		if !d.visit(dir, rel, e.Name()) {
 			return false
 		}
 	}
+
 	return true
+}
+
+// visit walks the subdirectory name of dir, or reports why it is skipped.
+func (d *discoverer) visit(dir string, rel []string, name string) bool {
+	child := filepath.Join(dir, name)
+	// A new array per child: items keep their Rel, so siblings must not share one.
+	childRel := slices.Concat(rel, []string{name})
+	if reason := d.skipReason(child, name, len(childRel)); reason != "" {
+		return d.warn(child, childRel, reason)
+	}
+
+	return d.walk(child, childRel)
+}
+
+// skipReason is the warning for a subdirectory that is not entered, or "".
+func (d *discoverer) skipReason(child, name string, depth int) string {
+	switch {
+	case slices.Contains(d.opts.Exclude, name):
+		return "skipped: excluded name"
+	case exists(filepath.Join(child, ".ignore")):
+		return "skipped: contains .ignore"
+	case depth > d.opts.MaxDepth:
+		return "skipped: maximum depth reached"
+	default:
+		return ""
+	}
 }
 
 func (d *discoverer) warn(path string, rel []string, msg string) bool {
@@ -153,5 +162,6 @@ func (d *discoverer) warn(path string, rel []string, msg string) bool {
 
 func exists(p string) bool {
 	_, err := os.Lstat(p)
+
 	return err == nil
 }

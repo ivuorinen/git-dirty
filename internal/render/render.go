@@ -19,14 +19,15 @@ import (
 // Style is the semantic role of a segment.
 type Style int
 
+// Styles, one per segment role.
 const (
-	Plain  Style = iota
-	Clean        // ✅ icon
-	Dirty        // ❌ icon
-	NotGit       // ⚠️ icon for directories and errors
-	Status       // [MS?$]
-	Branch       // branch names and ahead/behind counts
-	Error        // error text
+	Plain  Style = iota // unstyled text
+	Clean               // ✅ icon
+	Dirty               // ❌ icon
+	NotGit              // ⚠️ icon for directories and errors
+	Status              // [MS?$]
+	Branch              // branch names and ahead/behind counts
+	Error               // error text
 )
 
 // Icons, as in the bash script.
@@ -63,33 +64,56 @@ func Line(l tree.Line, o Options) []Segment {
 		return append(segs, Segment{IconNotGit, NotGit}, Segment{Text: " " + name})
 	}
 	r := n.Repo
-	switch {
-	case r.Err != nil:
-		segs = append(segs, Segment{IconNotGit, NotGit})
-	case r.Dirty():
-		segs = append(segs, Segment{IconDirty, Dirty})
-	default:
-		segs = append(segs, Segment{IconClean, Clean})
-	}
-	segs = append(segs, Segment{Text: " " + name})
+	segs = append(segs, stateIcon(r), Segment{Text: " " + name})
 	if letters := statusLetters(r.Status); letters != "" {
 		segs = append(segs, Segment{Text: " "}, Segment{"[" + letters + "]", Status})
 	}
 	if b := branchSegment(r, o); b != "" {
 		segs = append(segs, Segment{Text: " "}, Segment{b, Branch})
 	}
-	if d := r.Default; d != nil {
-		if l := d.Local; l != nil && !l.Gone && (l.Ahead > 0 || l.Behind > 0) {
-			segs = append(segs, Segment{Text: " · "}, Segment{Sanitize(d.Name) + counts(l.Ahead, l.Behind, false), Branch})
-		}
-		if v := d.Versus; v != nil {
-			segs = append(segs, Segment{Text: " · vs "}, Segment{Sanitize(d.Name) + counts(v.Ahead, v.Behind, true), Branch})
-		}
-	}
+	segs = append(segs, defaultSegments(r.Default)...)
 	if r.Err != nil {
 		msg, _, _ := strings.Cut(r.Err.Error(), "\n")
 		segs = append(segs, Segment{Text: " "}, Segment{"! " + Sanitize(msg), Error})
 	}
+
+	return segs
+}
+
+// stateIcon is the repository's icon: an error, dirty or clean.
+func stateIcon(r *gitstat.Result) Segment {
+	switch {
+	case r.Err != nil:
+		return Segment{IconNotGit, NotGit}
+	case r.Dirty():
+		return Segment{IconDirty, Dirty}
+	default:
+		return Segment{IconClean, Clean}
+	}
+}
+
+// defaultSegments compares with the default branch: its local branch against
+// its upstream when they differ, and the checked-out commit against it.
+func defaultSegments(d *gitstat.DefaultBranch) []Segment {
+	if d == nil {
+		return nil
+	}
+	var segs []Segment
+	if l := d.Local; l != nil && !l.Gone && (l.Ahead > 0 || l.Behind > 0) {
+		segs = append(
+			segs,
+			Segment{Text: " · "},
+			Segment{Sanitize(d.Name) + counts(l.Ahead, l.Behind, false), Branch},
+		)
+	}
+	if v := d.Versus; v != nil {
+		segs = append(
+			segs,
+			Segment{Text: " · vs "},
+			Segment{Sanitize(d.Name) + counts(v.Ahead, v.Behind, true), Branch},
+		)
+	}
+
 	return segs
 }
 
@@ -103,6 +127,7 @@ func statusLetters(s gitstat.Status) string {
 			b.WriteByte(l.c)
 		}
 	}
+
 	return b.String()
 }
 
@@ -115,6 +140,7 @@ func counts(ahead, behind int, always bool) string {
 	if always || behind > 0 {
 		s += fmt.Sprintf(" ↓%d", behind)
 	}
+
 	return s
 }
 
@@ -125,23 +151,32 @@ func branchSegment(r *gitstat.Result, o Options) string {
 	if h.Label == "" {
 		return ""
 	}
-	var tail string
-	switch u := r.Upstream; {
-	case u != nil && u.Gone:
-		tail = ", upstream gone"
-	case u != nil:
-		tail = counts(u.Ahead, u.Behind, false)
-	case !h.Detached() && !h.Unborn:
-		tail = ", no upstream"
-	}
+	tail := upstreamTail(r.Upstream, h)
 	hideName := !o.ShowBranch || (!h.Detached() && slices.Contains(o.MainBranches, h.Branch))
 	if hideName {
 		if strings.HasPrefix(tail, ",") {
 			return ""
 		}
+
 		return strings.TrimPrefix(tail, " ")
 	}
+
 	return "(" + Sanitize(h.Label) + tail + ")"
+}
+
+// upstreamTail follows the branch name: the upstream counts, or a note when
+// the upstream is gone or a branch has none.
+func upstreamTail(u *gitstat.Tracking, h gitstat.Head) string {
+	switch {
+	case u != nil && u.Gone:
+		return ", upstream gone"
+	case u != nil:
+		return counts(u.Ahead, u.Behind, false)
+	case !h.Detached() && !h.Unborn:
+		return ", no upstream"
+	default:
+		return ""
+	}
 }
 
 // Sanitize makes repository-controlled text safe to print to a terminal:
@@ -152,6 +187,7 @@ func Sanitize(s string) string {
 	for _, r := range s {
 		if r == utf8.RuneError || unicode.IsControl(r) {
 			clean = false
+
 			break
 		}
 	}
@@ -173,6 +209,7 @@ func Sanitize(s string) string {
 		}
 		i += size
 	}
+
 	return b.String()
 }
 
@@ -199,6 +236,7 @@ func WriteSegments(w io.Writer, segs []Segment, color bool) error {
 	}
 	b.WriteByte('\n')
 	_, err := io.WriteString(w, b.String())
+
 	return err
 }
 
@@ -211,6 +249,7 @@ func Header(root string, o Options) []string {
 	if o.ShowBranch {
 		lines = append(lines, "Showing non-standard branches (hiding "+strings.Join(o.MainBranches, " ")+")")
 	}
+
 	return append(lines, strings.Repeat("-", 57))
 }
 
@@ -220,6 +259,7 @@ func Summary(repos int, elapsed time.Duration) string {
 	if repos == 1 {
 		noun = "repository"
 	}
+
 	return fmt.Sprintf("Found %d git %s in %s", repos, noun, FormatDuration(elapsed))
 }
 
@@ -229,11 +269,20 @@ func FormatDuration(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%.2fs", d.Seconds())
 	}
+
 	return fmt.Sprintf("%dm %02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
 // WritePlain writes the whole report: header, tree, blank line, summary.
-func WritePlain(w io.Writer, root string, lines []tree.Line, repos int, elapsed time.Duration, o Options, color bool) error {
+func WritePlain(
+	w io.Writer,
+	root string,
+	lines []tree.Line,
+	repos int,
+	elapsed time.Duration,
+	o Options,
+	color bool,
+) error {
 	for _, h := range Header(root, o) {
 		if _, err := fmt.Fprintln(w, h); err != nil {
 			return err
@@ -245,5 +294,6 @@ func WritePlain(w io.Writer, root string, lines []tree.Line, repos int, elapsed 
 		}
 	}
 	_, err := fmt.Fprintf(w, "\n%s\n", Summary(repos, elapsed))
+
 	return err
 }

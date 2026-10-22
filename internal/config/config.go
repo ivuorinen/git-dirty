@@ -58,6 +58,7 @@ func Path() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return filepath.Join(home, ".config", "git-dirty", "config.json"), nil
 }
 
@@ -75,18 +76,19 @@ func Load() (Config, error) {
 	if err := applyEnv(&cfg); err != nil {
 		return cfg, err
 	}
+
 	return cfg, nil
 }
 
-func loadFile(path string, cfg *Config) error {
-	f, err := os.Open(path)
+func loadFile(path string, cfg *Config) (err error) {
+	f, err := os.Open(filepath.Clean(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 
 	dec := json.NewDecoder(f)
 	dec.DisallowUnknownFields()
@@ -96,6 +98,7 @@ func loadFile(path string, cfg *Config) error {
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return fmt.Errorf("%s: unexpected data after the JSON object", path)
 	}
+
 	return nil
 }
 
@@ -111,12 +114,8 @@ func applyEnv(cfg *Config) error {
 		{"GIT_DIRTY_MAXDEPTH", &cfg.MaxDepth},
 	}
 	for _, e := range ints {
-		if v, ok := os.LookupEnv(e.name); ok {
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return fmt.Errorf("%s: not a number: %q", e.name, v)
-			}
-			*e.dst = n
+		if err := envInt(e.name, e.dst); err != nil {
+			return err
 		}
 	}
 	bools := []struct {
@@ -131,12 +130,8 @@ func applyEnv(cfg *Config) error {
 		{"VERBOSE", &cfg.Verbose},
 	}
 	for _, e := range bools {
-		if v, ok := os.LookupEnv(e.name); ok {
-			b, err := strconv.ParseBool(v)
-			if err != nil {
-				return fmt.Errorf("%s: not a boolean (0/1/true/false): %q", e.name, v)
-			}
-			*e.dst = b
+		if err := envBool(e.name, e.dst); err != nil {
+			return err
 		}
 	}
 	if v, ok := os.LookupEnv("GIT_DIRTY_EXCLUDE"); ok {
@@ -149,6 +144,37 @@ func applyEnv(cfg *Config) error {
 	if os.Getenv("NO_COLOR") != "" {
 		cfg.Color = false
 	}
+
+	return nil
+}
+
+// envInt sets *dst from the variable name when it is set.
+func envInt(name string, dst *int) error {
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("%s: not a number: %q", name, v)
+	}
+	*dst = n
+
+	return nil
+}
+
+// envBool sets *dst from the variable name when it is set.
+func envBool(name string, dst *bool) error {
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fmt.Errorf("%s: not a boolean (0/1/true/false): %q", name, v)
+	}
+	*dst = b
+
 	return nil
 }
 
@@ -176,5 +202,6 @@ func (c *Config) Normalize() error {
 			return errors.New("exclude: empty pattern")
 		}
 	}
+
 	return nil
 }

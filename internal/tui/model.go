@@ -48,6 +48,7 @@ func Run(ctx context.Context, cfg Config, in io.Reader, out io.Writer) error {
 	} else {
 		m.stop()
 	}
+
 	return err
 }
 
@@ -56,7 +57,7 @@ type Model struct {
 	cfg    Config
 	parent context.Context
 
-	// The current scan. gen tags its messages so results of a cancelled
+	// The current scan. gen tags its messages so results of a canceled
 	// scan are dropped.
 	gen      int
 	cancel   context.CancelFunc
@@ -115,6 +116,7 @@ func New(ctx context.Context, cfg Config) *Model {
 		m.help.Styles = help.Styles{}
 	}
 	m.layout()
+
 	return m
 }
 
@@ -140,6 +142,51 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.startScan(), m.spinner.Tick)
 }
 
+// Update handles messages.
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.layout()
+
+		return m, nil
+
+	case batchMsg:
+		return m, m.addBatch(msg)
+
+	case spinner.TickMsg:
+		if !m.scanning {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+
+		return m, cmd
+
+	case tea.KeyPressMsg:
+		if cmd, ok := m.handleKey(msg); ok {
+			return m, cmd
+		}
+	}
+	var cmd tea.Cmd
+	m.vp, cmd = m.vp.Update(msg)
+
+	return m, cmd
+}
+
+// View renders the screen.
+func (m *Model) View() tea.View {
+	title := "git-dirty  " + render.Sanitize(m.cfg.Root)
+	if m.cfg.Color {
+		title = lipgloss.NewStyle().Bold(true).Render(title)
+	}
+	v := tea.NewView(strings.Join([]string{title, m.status(), m.vp.View(), m.help.View(m.keys)}, "\n"))
+	v.AltScreen = true
+	v.WindowTitle = "git-dirty"
+
+	return v
+}
+
 // startScan cancels any running scan and begins a new one.
 func (m *Model) startScan() tea.Cmd {
 	if m.cancel != nil {
@@ -155,6 +202,7 @@ func (m *Model) startScan() tea.Cmd {
 	m.start = m.cfg.Now()
 	m.elapsed = 0
 	m.refresh()
+
 	return waitBatch(m.gen, m.items)
 }
 
@@ -194,75 +242,61 @@ func (m *Model) stop() {
 	}
 }
 
-// Update handles messages.
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.layout()
-		return m, nil
-
-	case batchMsg:
-		if msg.gen != m.gen {
-			return m, nil // from a scan that was replaced
-		}
-		for _, it := range msg.items {
-			if it.Kind == scan.Dir {
-				m.dirs++
-			}
-			m.tree.Add(it)
-		}
-		if msg.done {
-			m.scanning = false
-			m.elapsed = m.cfg.Now().Sub(m.start)
-		}
-		m.refresh()
-		if msg.done {
-			return m, nil
-		}
-		return m, waitBatch(m.gen, m.items)
-
-	case spinner.TickMsg:
-		if !m.scanning {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
-
-	case tea.KeyPressMsg:
-		switch {
-		case key.Matches(msg, m.keys.Quit):
-			if m.cancel != nil {
-				m.cancel()
-			}
-			return m, tea.Quit
-		case key.Matches(msg, m.keys.Filter):
-			m.dirtyOnly = !m.dirtyOnly
-			m.refresh()
-			return m, nil
-		case key.Matches(msg, m.keys.Branch):
-			m.cfg.Render.ShowBranch = !m.cfg.Render.ShowBranch
-			m.refresh()
-			return m, nil
-		case key.Matches(msg, m.keys.Rescan):
-			return m, tea.Batch(m.startScan(), m.spinner.Tick)
-		case key.Matches(msg, m.keys.Help):
-			m.showAll = !m.showAll
-			m.help.ShowAll = m.showAll
-			m.layout()
-			return m, nil
-		case key.Matches(msg, m.keys.Top):
-			m.vp.GotoTop()
-			return m, nil
-		case key.Matches(msg, m.keys.Bottom):
-			m.vp.GotoBottom()
-			return m, nil
-		}
+// addBatch adds one batch of results to the tree and returns the command
+// that waits for the next, or nil once the scan is done.
+func (m *Model) addBatch(msg batchMsg) tea.Cmd {
+	if msg.gen != m.gen {
+		return nil // from a scan that was replaced
 	}
-	var cmd tea.Cmd
-	m.vp, cmd = m.vp.Update(msg)
-	return m, cmd
+	for _, it := range msg.items {
+		if it.Kind == scan.Dir {
+			m.dirs++
+		}
+		m.tree.Add(it)
+	}
+	if msg.done {
+		m.scanning = false
+		m.elapsed = m.cfg.Now().Sub(m.start)
+	}
+	m.refresh()
+	if msg.done {
+		return nil
+	}
+
+	return waitBatch(m.gen, m.items)
+}
+
+// handleKey runs the program's own key bindings. ok is false for any other
+// key, which then goes to the viewport.
+func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		if m.cancel != nil {
+			m.cancel()
+		}
+
+		return tea.Quit, true
+	case key.Matches(msg, m.keys.Filter):
+		m.dirtyOnly = !m.dirtyOnly
+		m.refresh()
+	case key.Matches(msg, m.keys.Branch):
+		m.cfg.Render.ShowBranch = !m.cfg.Render.ShowBranch
+		m.refresh()
+	case key.Matches(msg, m.keys.Rescan):
+		return tea.Batch(m.startScan(), m.spinner.Tick), true
+	case key.Matches(msg, m.keys.Help):
+		m.showAll = !m.showAll
+		m.help.ShowAll = m.showAll
+		m.layout()
+	case key.Matches(msg, m.keys.Top):
+		m.vp.GotoTop()
+	case key.Matches(msg, m.keys.Bottom):
+		m.vp.GotoBottom()
+	default:
+		return nil, false
+	}
+
+	return nil, true
 }
 
 // lines returns the tree as styled text, one string per row.
@@ -282,6 +316,7 @@ func (m *Model) lines() []string {
 		}
 		out = append(out, b.String())
 	}
+
 	return out
 }
 
@@ -311,19 +346,8 @@ func (m *Model) status() string {
 	if m.dirtyOnly {
 		s += "  [dirty only]"
 	}
-	return s
-}
 
-// View renders the screen.
-func (m *Model) View() tea.View {
-	title := "git-dirty  " + render.Sanitize(m.cfg.Root)
-	if m.cfg.Color {
-		title = lipgloss.NewStyle().Bold(true).Render(title)
-	}
-	v := tea.NewView(strings.Join([]string{title, m.status(), m.vp.View(), m.help.View(m.keys)}, "\n"))
-	v.AltScreen = true
-	v.WindowTitle = "git-dirty"
-	return v
+	return s
 }
 
 type keyMap struct {
@@ -335,6 +359,7 @@ func newKeyMap() keyMap {
 	b := func(keys []string, k, desc string) key.Binding {
 		return key.NewBinding(key.WithKeys(keys...), key.WithHelp(k, desc))
 	}
+
 	return keyMap{
 		Up:       b([]string{"up", "k"}, "↑/k", "up"),
 		Down:     b([]string{"down", "j"}, "↓/j", "down"),

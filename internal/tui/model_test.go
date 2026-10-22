@@ -20,7 +20,10 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-const root = "/home/u/Code"
+const (
+	root       = "/home/u/Code"
+	mainBranch = "main"
+)
 
 // feeder records every scan the model starts and hands it a channel the
 // test controls.
@@ -33,6 +36,7 @@ func (f *feeder) start(ctx context.Context, _ scan.Options) <-chan scan.Item {
 	ch := make(chan scan.Item, 16)
 	f.ctxs = append(f.ctxs, ctx)
 	f.feeds = append(f.feeds, ch)
+
 	return ch
 }
 
@@ -43,37 +47,59 @@ func newTestModel(t *testing.T) (*Model, *feeder) {
 	now := start
 	cfg := Config{
 		Root:   root,
-		Render: render.Options{ShowBranch: true, Truncate: true, MainBranches: []string{"main"}},
+		Render: render.Options{ShowBranch: true, Truncate: true, MainBranches: []string{mainBranch}},
 		Filter: tree.Filter{},
 		Start:  f.start,
 		Now: func() time.Time {
 			now = now.Add(750 * time.Millisecond)
+
 			return now
 		},
 	}
 	m := New(context.Background(), cfg)
 	m.Init()
+
 	return m, f
 }
 
 func repo(name string, res gitstat.Result) scan.Item {
 	res.Path = filepath.Join(root, name)
+
 	return scan.Item{Kind: scan.Repo, Path: res.Path, Rel: []string{name}, Result: res}
 }
 
 func results() []scan.Item {
 	h, _ := gitrepo.SHA1.ParseHex("1111111111111111111111111111111111111111")
+
 	return []scan.Item{
 		{Kind: scan.Dir, Path: root},
-		repo("clean", gitstat.Result{Head: gitstat.Head{Branch: "main", Label: "main", Hash: h}}),
-		repo("dirty", gitstat.Result{Head: gitstat.Head{Branch: "feature", Label: "feature", Hash: h}, Status: gitstat.Status{Modified: true}}),
+		repo("clean", gitstat.Result{Head: gitstat.Head{Branch: mainBranch, Label: mainBranch, Hash: h}}),
+		repo(
+			"dirty",
+			gitstat.Result{
+				Head:   gitstat.Head{Branch: "feature", Label: "feature", Hash: h},
+				Status: gitstat.Status{Modified: true},
+			},
+		),
 	}
 }
 
 func press(m *Model, k string) tea.Cmd {
 	r := []rune(k)[0]
 	_, cmd := m.Update(tea.KeyPressMsg{Code: r, Text: k})
+
 	return cmd
+}
+
+// runBatch runs a waitBatch command and returns its message.
+func runBatch(t *testing.T, cmd tea.Cmd) batchMsg {
+	t.Helper()
+	msg, ok := cmd().(batchMsg)
+	if !ok {
+		t.Fatalf("command returned %T, want batchMsg", msg)
+	}
+
+	return msg
 }
 
 func TestUpdate_BatchAddsResults(t *testing.T) {
@@ -97,7 +123,7 @@ func TestUpdate_StaleBatchIgnored(t *testing.T) {
 		t.Fatalf("gen = %d, scans started = %d, want 2 and 2", m.gen, len(f.ctxs))
 	}
 	if f.ctxs[0].Err() == nil {
-		t.Error("first scan's context not cancelled by rescan")
+		t.Error("first scan's context not canceled by rescan")
 	}
 	m.Update(batchMsg{gen: 1, items: results(), done: true})
 	if got := m.tree.Repos(); got != 0 {
@@ -148,7 +174,7 @@ func TestUpdate_Quit(t *testing.T) {
 		t.Error("q did not quit")
 	}
 	if f.ctxs[0].Err() == nil {
-		t.Error("scan not cancelled on quit")
+		t.Error("scan not canceled on quit")
 	}
 }
 
@@ -158,7 +184,7 @@ func TestWaitBatch_CollectsUntilClosed(t *testing.T) {
 		ch <- it
 	}
 	close(ch)
-	msg := waitBatch(7, ch)().(batchMsg)
+	msg := runBatch(t, waitBatch(7, ch))
 	if msg.gen != 7 || len(msg.items) != 3 || !msg.done {
 		t.Errorf("batch = gen %d, %d items, done %v", msg.gen, len(msg.items), msg.done)
 	}
@@ -168,7 +194,7 @@ func TestWaitBatch_ReturnsAfterWindow(t *testing.T) {
 	ch := make(chan scan.Item, 1)
 	ch <- results()[0]
 	start := time.Now()
-	msg := waitBatch(1, ch)().(batchMsg)
+	msg := runBatch(t, waitBatch(1, ch))
 	if msg.done || len(msg.items) != 1 {
 		t.Errorf("batch = %d items, done %v", len(msg.items), msg.done)
 	}
@@ -212,14 +238,14 @@ func TestView_Golden(t *testing.T) {
 	got := strings.Join(rows, "\n") + "\n"
 	path := filepath.Join("testdata", "view-80x24.golden")
 	if *update {
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
+		if err := os.MkdirAll("testdata", 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want, err := os.ReadFile(path)
+	want, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		t.Fatalf("%v (run with -update to create)", err)
 	}

@@ -8,11 +8,18 @@ import (
 	"testing"
 )
 
+// Variables named by more than one test.
+const (
+	envMaxDepth = "GIT_DIRTY_MAXDEPTH"
+	envColor    = "GIT_DIRTY_COLOR"
+	envNoColor  = "NO_COLOR"
+)
+
 var envNames = []string{
-	"GIT_DIRTY_DIR", "GIT_DIRTY_DEPTH", "GIT_DIRTY_MAXDEPTH",
+	"GIT_DIRTY_DIR", "GIT_DIRTY_DEPTH", envMaxDepth,
 	"GIT_DIRTY_CHECK_STASH", "GIT_DIRTY_CHECK_UNTRACKED", "GIT_DIRTY_EXCLUDE",
-	"GIT_DIRTY_COLOR", "GIT_DIRTY_TRUNCATE", "GIT_DIRTY_SHOW_BRANCH",
-	"GIT_DIRTY_MAIN_BRANCHES", "VERBOSE", "NO_COLOR",
+	envColor, "GIT_DIRTY_TRUNCATE", "GIT_DIRTY_SHOW_BRANCH",
+	"GIT_DIRTY_MAIN_BRANCHES", "VERBOSE", envNoColor,
 }
 
 // isolate points the config lookup at a temp dir and clears every variable
@@ -24,19 +31,22 @@ func isolate(t *testing.T) string {
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir) // os.UserHomeDir on Windows
 	for _, n := range envNames {
-		t.Setenv(n, "")
-		os.Unsetenv(n)
+		t.Setenv(n, "") // restores the original value after the test
+		if err := os.Unsetenv(n); err != nil {
+			t.Fatal(err)
+		}
 	}
+
 	return dir
 }
 
 func writeConfig(t *testing.T, xdg, body string) {
 	t.Helper()
 	p := filepath.Join(xdg, "git-dirty", "config.json")
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -52,80 +62,51 @@ func TestLoad_NoFileGivesDefaults(t *testing.T) {
 	}
 }
 
+// TestLoad_Precedence compares the whole Config, so a test also fails when a
+// setting it does not name loses its default.
 func TestLoad_Precedence(t *testing.T) {
 	tests := []struct {
-		name  string
-		file  string
-		env   map[string]string
-		check func(t *testing.T, c Config)
+		name string
+		file string
+		env  map[string]string
+		want func(c *Config) // applied to Defaults()
 	}{
 		{
 			name: "file overrides default",
 			file: `{"depth": 2, "dir": "/from/file"}`,
-			check: func(t *testing.T, c Config) {
-				if c.Depth != 2 || c.Dir != "/from/file" {
-					t.Errorf("depth=%d dir=%q", c.Depth, c.Dir)
-				}
-				if c.MaxDepth != 15 {
-					t.Errorf("unset key lost its default: maxDepth=%d", c.MaxDepth)
-				}
-			},
+			want: func(c *Config) { c.Depth, c.Dir = 2, "/from/file" },
 		},
 		{
 			name: "env overrides file",
 			file: `{"depth": 2, "dir": "/from/file", "checkStash": false}`,
 			env:  map[string]string{"GIT_DIRTY_DEPTH": "7", "GIT_DIRTY_DIR": "/from/env", "GIT_DIRTY_CHECK_STASH": "1"},
-			check: func(t *testing.T, c Config) {
-				if c.Depth != 7 || c.Dir != "/from/env" || !c.CheckStash {
-					t.Errorf("depth=%d dir=%q stash=%v", c.Depth, c.Dir, c.CheckStash)
-				}
-			},
+			want: func(c *Config) { c.Depth, c.Dir, c.CheckStash = 7, "/from/env", true },
 		},
 		{
 			name: "env exclude replaces the list",
 			env:  map[string]string{"GIT_DIRTY_EXCLUDE": "a  b"},
-			check: func(t *testing.T, c Config) {
-				if !reflect.DeepEqual(c.Exclude, []string{"a", "b"}) {
-					t.Errorf("exclude=%q", c.Exclude)
-				}
-			},
+			want: func(c *Config) { c.Exclude = []string{"a", "b"} },
 		},
 		{
 			name: "env main branches",
 			env:  map[string]string{"GIT_DIRTY_MAIN_BRANCHES": "develop"},
-			check: func(t *testing.T, c Config) {
-				if !reflect.DeepEqual(c.MainBranches, []string{"develop"}) {
-					t.Errorf("mainBranches=%q", c.MainBranches)
-				}
-			},
+			want: func(c *Config) { c.MainBranches = []string{"develop"} },
 		},
 		{
 			name: "NO_COLOR beats file and GIT_DIRTY_COLOR",
 			file: `{"color": true}`,
-			env:  map[string]string{"GIT_DIRTY_COLOR": "1", "NO_COLOR": "1"},
-			check: func(t *testing.T, c Config) {
-				if c.Color {
-					t.Error("color still on")
-				}
-			},
+			env:  map[string]string{envColor: "1", envNoColor: "1"},
+			want: func(c *Config) { c.Color = false },
 		},
 		{
 			name: "empty NO_COLOR is ignored",
-			env:  map[string]string{"NO_COLOR": ""},
-			check: func(t *testing.T, c Config) {
-				if !c.Color {
-					t.Error("color turned off by empty NO_COLOR")
-				}
-			},
+			env:  map[string]string{envNoColor: ""},
+			want: func(*Config) {},
 		},
 		{
 			name: "VERBOSE env",
 			env:  map[string]string{"VERBOSE": "1"},
-			check: func(t *testing.T, c Config) {
-				if !c.Verbose {
-					t.Error("verbose not set")
-				}
-			},
+			want: func(c *Config) { c.Verbose = true },
 		},
 	}
 	for _, tt := range tests {
@@ -141,7 +122,11 @@ func TestLoad_Precedence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			tt.check(t, cfg)
+			want := Defaults()
+			tt.want(&want)
+			if !reflect.DeepEqual(cfg, want) {
+				t.Errorf("got  %+v\nwant %+v", cfg, want)
+			}
 		})
 	}
 }
@@ -153,11 +138,11 @@ func TestLoad_Errors(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		{name: "unknown key names the key", file: `{"colour": true}`, want: `"colour"`},
+		{name: "unknown key names the key", file: `{"colors": true}`, want: `"colors"`},
 		{name: "wrong type", file: `{"depth": "two"}`, want: "depth"},
 		{name: "trailing data", file: `{} {}`, want: "unexpected data"},
-		{name: "bad int env", env: map[string]string{"GIT_DIRTY_MAXDEPTH": "x"}, want: "GIT_DIRTY_MAXDEPTH"},
-		{name: "bad bool env", env: map[string]string{"GIT_DIRTY_COLOR": "maybe"}, want: "GIT_DIRTY_COLOR"},
+		{name: "bad int env", env: map[string]string{envMaxDepth: "x"}, want: envMaxDepth},
+		{name: "bad bool env", env: map[string]string{envColor: "maybe"}, want: envColor},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -204,6 +189,7 @@ func TestNormalize(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want %q", err, tt.wantErr)
 				}
+
 				return
 			}
 			if err != nil {

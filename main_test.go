@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,6 +17,12 @@ import (
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
+
+// Flags named by several tests.
+const (
+	flagPlain = "--plain"
+	flagDepth = "-d"
+)
 
 // isolateEnv clears every setting git-dirty and git read from the
 // environment, so the developer's own configuration cannot change results.
@@ -27,8 +34,10 @@ func isolateEnv(t *testing.T) string {
 		"GIT_DIRTY_CHECK_UNTRACKED", "GIT_DIRTY_EXCLUDE", "GIT_DIRTY_COLOR", "GIT_DIRTY_TRUNCATE",
 		"GIT_DIRTY_SHOW_BRANCH", "GIT_DIRTY_MAIN_BRANCHES", "VERBOSE", "NO_COLOR", "GIT_CONFIG_GLOBAL",
 	} {
-		t.Setenv(k, "")
-		os.Unsetenv(k)
+		t.Setenv(k, "") // restores the original value after the test
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -38,18 +47,19 @@ func isolateEnv(t *testing.T) string {
 	t.Setenv("GIT_COMMITTER_NAME", "Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
 	gitconfig := "[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n"
-	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(gitconfig), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(gitconfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	return home
 }
 
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) //nolint:gosec // G204: tests run git as the oracle (CLAUDE.md)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
@@ -59,11 +69,33 @@ func gitIn(t *testing.T, dir string, args ...string) {
 func repoWithCommit(t *testing.T, dir string) {
 	t.Helper()
 	gitIn(t, dir, "init", "-q")
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitIn(t, dir, "add", "a.txt")
 	gitIn(t, dir, "commit", "-q", "-m", "init")
+}
+
+// golden compares got with testdata/name, rewriting the file first with
+// -update.
+func golden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	if *update {
+		if err := os.MkdirAll("testdata", 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatalf("%v (run with -update to create)", err)
+	}
+	if got != string(want) {
+		t.Errorf("output mismatch\n--- got\n%s\n--- want\n%s", got, want)
+	}
 }
 
 // TestRunPlain_Golden runs the whole program against a fixture tree, as
@@ -77,7 +109,7 @@ func TestRunPlain_Golden(t *testing.T) {
 	repoWithCommit(t, filepath.Join(root, "alpha"))
 	beta := filepath.Join(root, "beta")
 	repoWithCommit(t, beta)
-	if err := os.WriteFile(filepath.Join(beta, "a.txt"), []byte("changed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(beta, "a.txt"), []byte("changed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gamma := filepath.Join(root, "group", "gamma")
@@ -85,12 +117,12 @@ func TestRunPlain_Golden(t *testing.T) {
 	gitIn(t, gamma, "switch", "-q", "-c", "feature")
 	gitIn(t, gamma, "commit", "-q", "--allow-empty", "-m", "feature work")
 	gitIn(t, filepath.Join(root, "node_modules", "hidden"), "init", "-q")
-	if err := os.MkdirAll(filepath.Join(root, "notes"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "notes"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"--plain", root}, nil, &out, &errOut); code != exitOK {
+	if code := run(context.Background(), []string{flagPlain, root}, nil, &out, &errOut); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	if errOut.Len() != 0 {
@@ -98,23 +130,7 @@ func TestRunPlain_Golden(t *testing.T) {
 	}
 	got := strings.ReplaceAll(out.String(), root, "<root>")
 	got = regexp.MustCompile(`in [0-9.]+s\n$`).ReplaceAllString(got, "in <elapsed>\n")
-
-	path := filepath.Join("testdata", "plain.golden")
-	if *update {
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("%v (run with -update to create)", err)
-	}
-	if got != string(want) {
-		t.Errorf("output mismatch\n--- got\n%s\n--- want\n%s", got, want)
-	}
+	golden(t, "plain.golden", got)
 }
 
 func TestUseTUI(t *testing.T) {
@@ -133,7 +149,15 @@ func TestUseTUI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		if got := useTUI(tt.interactive, tt.term, tt.stdinTTY, tt.stdoutTTY); got != tt.want {
-			t.Errorf("useTUI(%v, %q, %v, %v) = %v, want %v", tt.interactive, tt.term, tt.stdinTTY, tt.stdoutTTY, got, tt.want)
+			t.Errorf(
+				"useTUI(%v, %q, %v, %v) = %v, want %v",
+				tt.interactive,
+				tt.term,
+				tt.stdinTTY,
+				tt.stdoutTTY,
+				got,
+				tt.want,
+			)
 		}
 	}
 }
@@ -143,7 +167,7 @@ func TestRunPlain_Interrupted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var out, errOut bytes.Buffer
-	if code := run(ctx, []string{"--plain", t.TempDir()}, nil, &out, &errOut); code != exitSignal {
+	if code := run(ctx, []string{flagPlain, t.TempDir()}, nil, &out, &errOut); code != exitSignal {
 		t.Errorf("exit %d, want %d", code, exitSignal)
 	}
 	if out.Len() != 0 {
@@ -153,98 +177,64 @@ func TestRunPlain_Interrupted(t *testing.T) {
 
 func TestExpandShortFlags(t *testing.T) {
 	tests := []struct {
-		in, want []string
+		in, want string // arguments separated by spaces
 	}{
-		{[]string{"-vac"}, []string{"-v", "-a", "-c"}},
-		{[]string{"-d3"}, []string{"-d", "3"}},
-		{[]string{"-vd3"}, []string{"-v", "-d", "3"}},
-		{[]string{"-e", "-x"}, []string{"-e", "-x"}},
-		{[]string{"-ve", "-x"}, []string{"-v", "-e", "-x"}},
-		{[]string{"-plain"}, []string{"-plain"}},
-		{[]string{"--plain", "-version"}, []string{"--plain", "-version"}},
-		{[]string{"-vz"}, []string{"-vz"}},
-		{[]string{"--", "-vac"}, []string{"--", "-vac"}},
-		{[]string{"dir", "-tb"}, []string{"dir", "-t", "-b"}},
+		{"-vac", "-v -a -c"},
+		{"-d3", "-d 3"},
+		{"-vd3", "-v -d 3"},
+		{"-e -x", "-e -x"},
+		{"-ve -x", "-v -e -x"},
+		{"-plain", "-plain"},
+		{"--plain -version", "--plain -version"},
+		{"-vz", "-vz"},
+		{"-- -vac", "-- -vac"},
+		{"dir -tb", "dir -t -b"},
 	}
 	for _, tt := range tests {
-		if got := expandShortFlags(tt.in); !reflect.DeepEqual(got, tt.want) {
-			t.Errorf("expandShortFlags(%q) = %q, want %q", tt.in, got, tt.want)
+		in, want := strings.Fields(tt.in), strings.Fields(tt.want)
+		if got := expandShortFlags(in); !reflect.DeepEqual(got, want) {
+			t.Errorf("expandShortFlags(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
+// TestParseArgs compares the whole result, so a test also fails when a flag
+// changes a setting it should not touch.
 func TestParseArgs(t *testing.T) {
 	base := config.Defaults()
 	tests := []struct {
-		name  string
-		args  []string
-		check func(t *testing.T, o options)
+		name string
+		args string         // arguments separated by spaces
+		want func(*options) // applied to the result of parsing no arguments
 	}{
-		{"cluster -vac", []string{"-vac"}, func(t *testing.T, o options) {
-			c := o.cfg
-			if !c.Verbose || !c.CheckStash || !c.CheckUntracked || c.Color {
-				t.Errorf("verbose=%v stash=%v untracked=%v color=%v", c.Verbose, c.CheckStash, c.CheckUntracked, c.Color)
-			}
+		{"cluster -vac", "-vac", func(o *options) {
+			o.cfg.Verbose, o.cfg.CheckStash, o.cfg.CheckUntracked, o.cfg.Color = true, true, true, false
 		}},
-		{"attached value -d3", []string{"-d3"}, func(t *testing.T, o options) {
-			if o.cfg.Depth != 3 {
-				t.Errorf("depth=%d", o.cfg.Depth)
-			}
+		{"attached value -d3", "-d3", func(o *options) { o.cfg.Depth = 3 }},
+		{"-m overrides config", "-m 4", func(o *options) { o.cfg.MaxDepth = 4 }},
+		{"-e appends, repeatable", "-e a,b -e c,,", func(o *options) {
+			o.cfg.Exclude = append(o.cfg.Exclude, "a", "b", "c")
 		}},
-		{"-m overrides config", []string{"-m", "4"}, func(t *testing.T, o options) {
-			if o.cfg.MaxDepth != 4 {
-				t.Errorf("maxDepth=%d", o.cfg.MaxDepth)
-			}
-		}},
-		{"-e appends, repeatable", []string{"-e", "a,b", "-e", "c,,"}, func(t *testing.T, o options) {
-			want := append(append([]string(nil), base.Exclude...), "a", "b", "c")
-			if !reflect.DeepEqual(o.cfg.Exclude, want) {
-				t.Errorf("exclude=%q", o.cfg.Exclude)
-			}
-		}},
-		{"flags after the positional", []string{"/tmp/x", "-v"}, func(t *testing.T, o options) {
-			if o.cfg.Dir != "/tmp/x" || !o.cfg.Verbose {
-				t.Errorf("dir=%q verbose=%v", o.cfg.Dir, o.cfg.Verbose)
-			}
-		}},
-		{"toggle twice restores", []string{"-cc", "-b"}, func(t *testing.T, o options) {
-			if !o.cfg.Color || o.cfg.ShowBranch {
-				t.Errorf("color=%v showBranch=%v", o.cfg.Color, o.cfg.ShowBranch)
-			}
-		}},
-		{"-t toggles truncate", []string{"-t"}, func(t *testing.T, o options) {
-			if o.cfg.Truncate {
-				t.Error("truncate still on")
-			}
-		}},
-		{"--plain and -p", []string{"--plain", "-p"}, func(t *testing.T, o options) {
-			if o.cfg.Interactive {
-				t.Error("interactive still on")
-			}
-		}},
-		{"dash-prefixed dir after --", []string{"-v", "--", "-weird"}, func(t *testing.T, o options) {
-			if o.cfg.Dir != "-weird" {
-				t.Errorf("dir=%q", o.cfg.Dir)
-			}
-		}},
-		{"-h", []string{"-h"}, func(t *testing.T, o options) {
-			if !o.help {
-				t.Error("help not set")
-			}
-		}},
-		{"--version", []string{"--version"}, func(t *testing.T, o options) {
-			if !o.version {
-				t.Error("version not set")
-			}
-		}},
+		{"flags after the positional", "/tmp/x -v", func(o *options) { o.cfg.Dir, o.cfg.Verbose = "/tmp/x", true }},
+		{"toggle twice restores", "-cc -b", func(o *options) { o.cfg.ShowBranch = false }},
+		{"-t toggles truncate", "-t", func(o *options) { o.cfg.Truncate = false }},
+		{"--plain and -p", "--plain -p", func(o *options) { o.cfg.Interactive = false }},
+		{"dash-prefixed dir after --", "-v -- -weird", func(o *options) { o.cfg.Dir, o.cfg.Verbose = "-weird", true }},
+		{"help", "-h", func(o *options) { o.help = true }},
+		{"version", "--version", func(o *options) { o.version = true }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			o, err := parseArgs(tt.args, base)
+			got, err := parseArgs(strings.Fields(tt.args), base)
 			if err != nil {
 				t.Fatal(err)
 			}
-			tt.check(t, o)
+			want := options{cfg: base}
+			want.cfg.Exclude = slices.Clone(base.Exclude)
+			tt.want(&want)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got  %+v\nwant %+v", got, want)
+			}
 		})
 	}
 }
@@ -264,8 +254,8 @@ func TestParseArgs_DoesNotMutateCallerExclude(t *testing.T) {
 func TestParseArgs_Errors(t *testing.T) {
 	for _, args := range [][]string{
 		{"-x"},
-		{"-d"},
-		{"-d", "abc"},
+		{flagDepth},
+		{flagDepth, "abc"},
 		{"a", "b"},
 		{"--nope"},
 	} {
@@ -278,7 +268,7 @@ func TestParseArgs_Errors(t *testing.T) {
 func TestRunExitCodes(t *testing.T) {
 	isolateEnv(t)
 	file := filepath.Join(t.TempDir(), "file")
-	if err := os.WriteFile(file, nil, 0o644); err != nil {
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -288,13 +278,13 @@ func TestRunExitCodes(t *testing.T) {
 		wantStderr string
 	}{
 		{[]string{"-x"}, exitUsage, "", "-h' for usage"},
-		{[]string{"-d"}, exitUsage, "", "flag needs an argument"},
-		{[]string{"-d", "abc"}, exitUsage, "", "invalid value"},
+		{[]string{flagDepth}, exitUsage, "", "flag needs an argument"},
+		{[]string{flagDepth, "abc"}, exitUsage, "", "invalid value"},
 		{[]string{"-h"}, exitOK, "Usage: git-dirty", ""},
 		{[]string{"--version"}, exitOK, "dev", ""},
 		{[]string{"-m", "0", t.TempDir()}, exitError, "", "maxDepth"},
-		{[]string{"--plain", filepath.Join(t.TempDir(), "missing")}, exitError, "", "no such file"},
-		{[]string{"--plain", file}, exitError, "", "not a directory"},
+		{[]string{flagPlain, filepath.Join(t.TempDir(), "missing")}, exitError, "", "no such file"},
+		{[]string{flagPlain, file}, exitError, "", "not a directory"},
 	}
 	for _, tt := range tests {
 		var out, errOut bytes.Buffer
