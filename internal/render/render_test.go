@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,9 +31,11 @@ func onBranch(name string) gitstat.Head {
 	return gitstat.Head{Branch: name, Label: name, Hash: someHash}
 }
 
+// The fixture's paths are slash-separated on every platform (path, not
+// filepath), so the truncate-off golden file holds on Windows too.
 func repo(rel string, res gitstat.Result) scan.Item {
 	parts := strings.Split(rel, "/")
-	res.Path = filepath.Join(root, rel)
+	res.Path = path.Join(root, rel)
 
 	return scan.Item{Kind: scan.Repo, Path: res.Path, Rel: parts, Result: res}
 }
@@ -42,7 +45,7 @@ func dir(rel string) scan.Item {
 		return scan.Item{Kind: scan.Dir, Path: root}
 	}
 
-	return scan.Item{Kind: scan.Dir, Path: filepath.Join(root, rel), Rel: strings.Split(rel, "/")}
+	return scan.Item{Kind: scan.Dir, Path: path.Join(root, rel), Rel: strings.Split(rel, "/")}
 }
 
 // fixture covers every branch-segment variant from the plan's output format.
