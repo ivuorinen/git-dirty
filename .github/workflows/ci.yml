@@ -22,7 +22,7 @@ concurrency:
 # the customManagers:githubActionsVersions preset, and the tools via mise.toml.
 env:
   # renovate: datasource=github-releases depName=jdx/mise
-  MISE_VERSION: v2026.10.8
+  MISE_VERSION: v2026.10.17
 
 jobs:
   test:
