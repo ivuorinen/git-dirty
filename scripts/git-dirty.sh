@@ -587,7 +587,8 @@ process_in_parallel()
   if [[ $have_gnu_parallel -eq 1 ]]; then
     # GNU parallel approach
     export -f check_git_status has_unpushed_commits truncate_path print_color \
-      get_branch_name format_path_for_sorting get_basename is_main_branch
+      use_color get_branch_name format_path_for_sorting get_basename \
+      is_main_branch
     export GIT_DIRTY_TRUNCATE BASE_DIR GIT_CLEAN GIT_DIRTY \
       GIT_DIRTY_CHECK_STASH GIT_DIRTY_CHECK_UNTRACKED \
       GIT_DIRTY_SHOW_BRANCH GIT_DIRTY_MAIN_BRANCHES BRANCH_COLOR STATUS_COLOR
