@@ -4,6 +4,7 @@ Showing non-standard branches (hiding main master trunk)
 ---------------------------------------------------------
 ⚠️ <root>
 ├── ✅ alpha
+│   └── 🌳 ✅ alpha-side (side, no upstream) · vs main ↑0 ↓0
 ├── ❌ beta [M]
 └── ⚠️ group
     └── ✅ gamma (feature, no upstream) · vs main ↑1 ↓0

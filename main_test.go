@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/ivuorinen/git-dirty/internal/config"
+	"github.com/ivuorinen/git-dirty/internal/scan"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -106,7 +107,10 @@ func TestRunPlain_Golden(t *testing.T) {
 	}
 	isolateEnv(t)
 	root := t.TempDir()
-	repoWithCommit(t, filepath.Join(root, "alpha"))
+	alpha := filepath.Join(root, "alpha")
+	repoWithCommit(t, alpha)
+	// Found by the walk too, but listed once: under alpha, with 🌳.
+	gitIn(t, alpha, "worktree", "add", "-q", "-b", "side", filepath.Join(root, "alpha-side"))
 	beta := filepath.Join(root, "beta")
 	repoWithCommit(t, beta)
 	if err := os.WriteFile(filepath.Join(beta, "a.txt"), []byte("changed\n"), 0o600); err != nil {
@@ -131,6 +135,17 @@ func TestRunPlain_Golden(t *testing.T) {
 	got := strings.ReplaceAll(out.String(), root, "<root>")
 	got = regexp.MustCompile(`in [0-9.]+s\n$`).ReplaceAllString(got, "in <elapsed>\n")
 	golden(t, "plain.golden", got)
+}
+
+// The terminal counter counts what the summary counts: not worktrees.
+func TestProgress_CountsRepositoriesOnly(t *testing.T) {
+	var buf bytes.Buffer
+	p := progress{w: &buf, counter: true}
+	p.report(scan.Item{Kind: scan.Repo, Path: "r"})
+	p.report(scan.Item{Kind: scan.Repo, Path: "wt", Worktree: true})
+	if want := "\rFound 1 git repositories..."; !strings.HasSuffix(buf.String(), want) {
+		t.Errorf("counter output %q, want it to end in %q", buf.String(), want)
+	}
 }
 
 func TestUseTUI(t *testing.T) {
