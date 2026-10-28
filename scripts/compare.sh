@@ -15,6 +15,10 @@
 # from its directory name, so it matches the bash script's line for the same
 # directory. A worktree the bash script does not reach (outside the
 # directory, or below an excluded one) is listed by git-dirty only: a + line.
+#
+# Only ✅ and ❌ lines are compared. ⚠️ lines are skipped on both sides, so a
+# worktree git-dirty cannot read (its directory is gone, or its files are
+# invalid) gives no line: the bash script has no counterpart for it.
 set -euo pipefail
 
 dir=${1:-$HOME/Code}
