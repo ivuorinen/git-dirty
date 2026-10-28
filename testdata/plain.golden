@@ -1,5 +1,5 @@
 Checking repositories in: <root>
-Legend: ✅ Clean repo | ❌ Dirty repo | ⚠️ Directory / error
+Legend: ✅ Clean repo | ❌ Dirty repo | 🌳 Worktree | ⚠️ Directory / error
 Showing non-standard branches (hiding main master trunk)
 ---------------------------------------------------------
 ⚠️ <root>
