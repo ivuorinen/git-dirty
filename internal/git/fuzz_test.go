@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -206,6 +207,42 @@ func FuzzPackIdx(f *testing.F) {
 		_, _, _ = p.find(fuzzPackID)
 		for i := uint32(0); i < p.count && i < 64; i++ {
 			_, _ = p.offset(i)
+		}
+	})
+}
+
+// linkFileSeeds returns the two files git writes for a linked worktree: its
+// .git file and the gitdir file in the repository's worktrees/<id>/.
+func linkFileSeeds(f *testing.F) [][]byte {
+	f.Helper()
+	dir := newRepo(f, SHA1)
+	commit(f, dir, "a.txt", "a\n", "seed")
+	wt := filepath.Join(f.TempDir(), "wt")
+	run(f, dir, "worktree", "add", "-q", "-b", "wt", wt)
+	paths := []string{filepath.Join(wt, ".git"), filepath.Join(dir, ".git", "worktrees", "wt", "gitdir")}
+	seeds := make([][]byte, 0, len(paths))
+	for _, p := range paths {
+		b, err := os.ReadFile(filepath.Clean(p))
+		if err != nil {
+			f.Fatal(err)
+		}
+		seeds = append(seeds, b)
+	}
+
+	return seeds
+}
+
+func FuzzLinkFile(f *testing.F) {
+	for _, b := range linkFileSeeds(f) {
+		f.Add(b)
+	}
+	f.Add([]byte("gitdir: \n"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, prefix := range []string{"gitdir:", ""} {
+			dir, err := parseLinkFile(data, prefix)
+			if err == nil && (dir == "" || strings.Contains(dir, "\n")) {
+				t.Fatalf("parseLinkFile(%q, %q) = %q", data, prefix, dir)
+			}
 		}
 	})
 }
