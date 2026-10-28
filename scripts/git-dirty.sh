@@ -1070,14 +1070,14 @@ main()
   # Expand path if it contains tilde
   GIT_DIRTY_DIR="${GIT_DIRTY_DIR/#\~/$HOME}"
 
-  # Set base directory for path truncation
-  BASE_DIR="$(cd "$GIT_DIRTY_DIR" && pwd)"
-
   # Verify the directory exists
   if [[ ! -d $GIT_DIRTY_DIR ]]; then
     log_error "Directory does not exist: $GIT_DIRTY_DIR"
     exit 1
   fi
+
+  # Set base directory for path truncation
+  BASE_DIR="$(cd "$GIT_DIRTY_DIR" && pwd)"
 
   # Update color variables after possible toggle
   if use_color; then
