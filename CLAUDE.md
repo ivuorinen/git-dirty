@@ -8,8 +8,8 @@ code in this repository.
 `git-dirty` is a Go CLI and TUI that walks a directory for git working trees and
 shows each one as a tree line: branch, dirty letters (`M S ? $`), ahead/behind
 against the upstream, and the comparison with the default branch. It replaces a
-bash script (`~/.local/bin/git-dirty.sh`) and keeps its flags and `GIT_DIRTY_*`
-environment variables.
+bash script, kept as `scripts/git-dirty.sh` for `bench` and `compare.sh`, and
+keeps its flags and `GIT_DIRTY_*` environment variables.
 
 ## Development Commands
 

@@ -94,16 +94,15 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; d
 done
 '''
 
-# Warm-cache comparison with the bash script it replaces, written to bench.md
-# (gitignored). hyperfine discards the commands' output, so terminal rendering
-# is not timed. BENCH_DIR overrides the scanned directory.
+# Warm-cache comparison with the bash script it replaces (scripts/git-dirty.sh),
+# written to bench.md (gitignored). hyperfine discards the commands' output, so
+# terminal rendering is not timed. BENCH_DIR overrides the scanned directory.
 [tasks.bench]
 description = "Benchmark against the bash script with hyperfine (warm cache)"
 depends = ["build"]
 run = '''
 dir=${BENCH_DIR:-$HOME/Code}
-old=$HOME/.local/bin/git-dirty.sh
-[ -x "$old" ] || old=$HOME/.local/bin/git-dirty
+old=scripts/git-dirty.sh
 hyperfine --warmup 3 --runs 5 --export-markdown bench.md \
   -n "bash script" "$old $dir" \
   -n "bash script -p" "$old -p $dir" \

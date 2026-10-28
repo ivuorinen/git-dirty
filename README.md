@@ -195,6 +195,9 @@ mise run bench          # hyperfine against the bash script (warm cache)
 scripts/compare.sh      # repository-by-repository comparison with the bash script
 ```
 
+The bash script git-dirty replaces is kept as `scripts/git-dirty.sh`, the
+reference that `bench` and `compare.sh` run.
+
 The tests build real repositories with the `git` binary and use git's own
 answers (`git diff --quiet`, `git rev-list --left-right --count`, and others)
 as the expected values, in both SHA-1 and SHA-256 repositories.
