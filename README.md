@@ -10,6 +10,8 @@ checked-out branch has diverged from the default branch.
 ⚠️ /home/u/Code
 ├── ⚠️ ivuorinen
 │   ├── ❌ git-dirty [M?] (feature/tree ↑2) · main ↓4 · vs main ↑5 ↓1
+│   │   ├── 🌳 ✅ feat (feat, no upstream) · vs main ↑1 ↓0
+│   │   └── 🌳 ⚠️ old ! worktree: gitdir file points to non-existent location
 │   ├── ✅ dotfiles ↓3
 │   ├── ❌ gh-history ↑1
 │   └── ⚠️ broken ! index: unknown extension
@@ -75,6 +77,7 @@ a usage error, 130 when interrupted.
 | --- | --- |
 | ✅ / ❌ | Clean / dirty. Dirty means any status letter is set, or there are commits not pushed to the upstream. Being behind does not make a repository dirty. |
 | ⚠️ | A directory without a repository, or a repository that could not be read (`! <error>`) |
+| 🌳 | A linked worktree (`git worktree add`), listed under its repository, before its own ✅, ❌ or ⚠️ and the parts below. Its name is its ID under `.git/worktrees/`, which git takes from the directory name. |
 | `M` | Worktree differs from the index (`git diff --quiet` would fail) |
 | `S` | Index differs from HEAD (`git diff --cached --quiet` would fail) |
 | `?` | Untracked files that are not ignored (on by default; `GIT_DIRTY_CHECK_UNTRACKED=0` turns it off) |
@@ -151,6 +154,14 @@ file named `.ignore`. To hide a repository, add an empty `.ignore` next to its
 untracked. Symbolic links are never followed, and the scan does not descend
 into repositories.
 
+A repository's linked worktrees come from its own records, not from the scan,
+so they are listed under it wherever they are on disk: the exclude list,
+`.ignore` and the depth limits do not apply to them. A linked worktree that the
+scan finds itself stays at its own place only when its repository is not in
+the scan. A worktree whose directory was deleted shows ⚠️ with git's wording,
+`gitdir file points to non-existent location`, until `git worktree prune`
+removes it. Worktrees are not counted in "Found N git repositories".
+
 Ignore rules follow git's: `core.excludesFile` (default
 `~/.config/git/ignore`), `.git/info/exclude`, and every `.gitignore`.
 
@@ -166,6 +177,7 @@ Ignore rules follow git's: `core.excludesFile` (default
 | `-d` is documented but not used | `-d` limits the depth of non-repository directories under `-v` |
 | `-t` has no visible effect | `-t` off prints full paths |
 | Stash check reads the loose `refs/stash` file only | Packed refs are found too |
+| A linked worktree is listed only where the scan finds it, as a repository | Every linked worktree is listed under its repository, marked 🌳 |
 
 ## Known limitations
 
@@ -181,7 +193,11 @@ Ignore rules follow git's: `core.excludesFile` (default
 - The commit-graph file is not used: ahead/behind is computed from commit
   objects. The counts are the same; only very long divergences take longer.
 - `[include]` and `[includeIf]` in git config files are not followed.
-- Bare repositories under the scan root are not detected.
+- Per-worktree config (`extensions.worktreeConfig`, `config.worktree`) is not
+  read, and a repository with `extensions.relativeWorktrees` is refused as an
+  unknown extension.
+- Bare repositories under the scan root are not detected; their linked
+  worktrees inside the root are listed on their own.
 
 ## Development
 
