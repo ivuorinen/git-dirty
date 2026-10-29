@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
-# Compare git-dirty with the original bash script, repository by repository.
-# Development aid only; not shipped.
+# Compare git-dirty with the original bash script, scripts/git-dirty.sh,
+# repository by repository. Development aid only; not shipped.
 #
 # Usage: scripts/compare.sh [directory]
+# GIT_DIRTY_OLD and GIT_DIRTY_NEW override the two programs.
 #
 # Both tools run with -a (stash and untracked checks). Each repository is
 # reduced to "name<TAB>letters<TAB>branch", where letters are the sorted
 # status letters plus ↑ for unpushed commits and branch is the name shown in
 # parentheses (empty for main branches). The bash script's tree order is not
 # used: its sort key places some entries under the wrong parent.
+#
+# A git-dirty worktree line (🌳) reduces to the worktree's ID, which git takes
+# from its directory name, so it matches the bash script's line for the same
+# directory. A worktree the bash script does not reach (outside the
+# directory, or below an excluded one) is listed by git-dirty only: a + line.
+#
+# Only ✅ and ❌ lines are compared. ⚠️ lines are skipped on both sides, so a
+# worktree git-dirty cannot read (its directory is gone, or its files are
+# invalid) gives no line: the bash script has no counterpart for it.
 set -euo pipefail
 
 dir=${1:-$HOME/Code}
-old=${GIT_DIRTY_OLD:-}
-if [ -z "$old" ]; then
-  if [ -x "$HOME/.local/bin/git-dirty.sh" ]; then
-    old=$HOME/.local/bin/git-dirty.sh
-  else
-    old=$HOME/.local/bin/git-dirty
-  fi
-fi
+old=${GIT_DIRTY_OLD:-$(dirname "$0")/git-dirty.sh}
 new=${GIT_DIRTY_NEW:-./git-dirty}
 
 tmp=$(mktemp -d)

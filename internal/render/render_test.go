@@ -40,6 +40,17 @@ func repo(rel string, res gitstat.Result) scan.Item {
 	return scan.Item{Kind: scan.Repo, Path: res.Path, Rel: parts, Result: res}
 }
 
+// worktree is a linked worktree listed under the repository its rel is in.
+// Its directory is outside the root, as most are.
+func worktree(rel string, res gitstat.Result) scan.Item {
+	it := repo(rel, res)
+	it.Worktree = true
+	it.Path = path.Join("/home/u/worktrees", path.Base(rel))
+	it.Result.Path = it.Path
+
+	return it
+}
+
 func dir(rel string) scan.Item {
 	if rel == "" {
 		return scan.Item{Kind: scan.Dir, Path: root}
@@ -64,9 +75,19 @@ func fixture() *tree.Tree {
 				Versus: &gitstat.Tracking{Ref: originMain, Ahead: 5, Behind: 1},
 			},
 		}),
+		worktree("ivuorinen/git-dirty/feat", gitstat.Result{Head: onBranch("feat")}),
+		worktree("ivuorinen/git-dirty/old", gitstat.Result{
+			Err: errors.New("worktree: gitdir file points to non-existent location"),
+		}),
 		repo("ivuorinen/dotfiles", gitstat.Result{
 			Head:     onBranch(mainBranch),
 			Upstream: &gitstat.Tracking{Ref: originMain, Behind: 3},
+		}),
+		// A dirty worktree of a clean repository: the dirty filter keeps both.
+		worktree("ivuorinen/dotfiles/hotfix", gitstat.Result{
+			Head:     onBranch("hotfix"),
+			Status:   gitstat.Status{Modified: true},
+			Upstream: &gitstat.Tracking{Ref: "origin/hotfix", Ahead: 1},
 		}),
 		repo("ivuorinen/gh-history", gitstat.Result{
 			Head:     onBranch(mainBranch),

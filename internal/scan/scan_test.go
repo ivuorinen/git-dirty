@@ -28,6 +28,10 @@ func TestMain(m *testing.M) {
 		"HOME":                home,
 		"XDG_CONFIG_HOME":     filepath.Join(home, ".config"),
 		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME":     "Test",
+		"GIT_AUTHOR_EMAIL":    "test@example.invalid",
+		"GIT_COMMITTER_NAME":  "Test",
+		"GIT_COMMITTER_EMAIL": "test@example.invalid",
 	} {
 		if err := os.Setenv(k, v); err != nil {
 			panic(err)
@@ -43,6 +47,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// gitIn runs git in dir; failure fails the test.
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	args = append([]string{"-C", dir}, args...)
+	//nolint:gosec // G204: tests run git as the oracle (CLAUDE.md)
+	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+}
+
 // mkrepo makes an initialized repository at root/rel (no commits needed).
 func mkrepo(t *testing.T, root, rel string) {
 	t.Helper()
@@ -50,10 +64,7 @@ func mkrepo(t *testing.T, root, rel string) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	//nolint:gosec // G204: tests run git as the oracle (CLAUDE.md)
-	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
-	}
+	gitIn(t, dir, "init", "-q")
 }
 
 func mkdir(t *testing.T, root, rel string) {
@@ -168,6 +179,123 @@ func TestRun_RootIsRepo(t *testing.T) {
 	if want := []string{""}; !slices.Equal(c.repos, want) || len(c.dirs) != 0 {
 		t.Errorf("repos = %q dirs = %q, want the root as the only repo", c.repos, c.dirs)
 	}
+}
+
+// worktreesFixture makes base/repo with linked worktrees beside it
+// (sibling), nested in it, in an excluded directory (node_modules/inex), in
+// a directory of their own (only/wt2), outside base (away) and deleted
+// (stale).
+func worktreesFixture(t *testing.T) (base, repo string) {
+	t.Helper()
+	base = t.TempDir()
+	repo = filepath.Join(base, "repo")
+	mkrepo(t, repo, ".")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "init")
+	stale := filepath.Join(t.TempDir(), "stale")
+	for _, p := range []string{
+		filepath.Join(base, "sibling"),
+		filepath.Join(repo, ".worktrees", "nested"),
+		filepath.Join(base, "node_modules", "inex"),
+		filepath.Join(base, "only", "wt2"),
+		filepath.Join(t.TempDir(), "away"),
+		stale,
+	} {
+		gitIn(t, repo, "worktree", "add", "-q", "--detach", p)
+	}
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	return base, repo
+}
+
+// underRepo is what a scan of the fixture's base finds: every worktree
+// under the repository, sibling and only/wt2 included although the walk
+// finds them too.
+var underRepo = map[string]bool{
+	"repo": false, "repo/sibling": true, "repo/nested": true, "repo/inex": true,
+	"repo/wt2": true, "repo/away": true, "repo/stale": true,
+}
+
+// repoItems runs a scan and returns its repository items by Rel.
+func repoItems(t *testing.T, opts Options) map[string]Item {
+	t.Helper()
+	got := map[string]Item{}
+	for it := range Run(context.Background(), opts) {
+		if it.Kind == Repo {
+			got[strings.Join(it.Rel, "/")] = it
+		}
+	}
+
+	return got
+}
+
+// checkRepos compares the repository items with want, which maps each Rel to
+// whether it is a worktree listed under its repository. A Rel ending in
+// "stale" must carry git's error for a deleted worktree; others none.
+func checkRepos(t *testing.T, got map[string]Item, want map[string]bool) {
+	t.Helper()
+	for rel, it := range got {
+		wt, ok := want[rel]
+		switch {
+		case !ok:
+			t.Errorf("unexpected item at %q", rel)
+		case it.Worktree != wt:
+			t.Errorf("%q: Worktree = %v, want %v", rel, it.Worktree, wt)
+		case strings.HasSuffix(rel, "stale"):
+			if it.Result.Err == nil || !strings.Contains(it.Result.Err.Error(),
+				"worktree: gitdir file points to non-existent location") {
+				t.Errorf("%q: Err = %v, want the deleted-worktree error", rel, it.Result.Err)
+			}
+		case it.Result.Err != nil:
+			t.Errorf("%q: %v", rel, it.Result.Err)
+		}
+	}
+	for rel := range want {
+		if _, ok := got[rel]; !ok {
+			t.Errorf("no item at %q", rel)
+		}
+	}
+}
+
+func TestRun_Worktrees(t *testing.T) {
+	base, repo := worktreesFixture(t)
+	for _, c := range []struct {
+		name    string
+		root    string
+		exclude string
+		want    map[string]bool
+	}{
+		{"base", base, "", underRepo},
+		{"repository excluded", base, filepath.Base(repo), map[string]bool{"sibling": false, "only/wt2": false}},
+		{"root is the repository", repo, "", map[string]bool{
+			"": false, "sibling": true, "nested": true, "inex": true, "wt2": true, "away": true, "stale": true,
+		}},
+		{"root is a linked worktree", filepath.Join(base, "sibling"), "", map[string]bool{"": false}},
+		{"repository outside the root", filepath.Join(base, "only"), "", map[string]bool{"wt2": false}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			opts := baseOpts(c.root)
+			if c.exclude != "" {
+				opts.Exclude = append(opts.Exclude, c.exclude)
+			}
+			checkRepos(t, repoItems(t, opts), c.want)
+		})
+	}
+}
+
+// TestRun_WorktreesSymlinkedRoot reaches the fixture through a symlink. Git
+// records worktree paths with symlinks resolved, so the walk's path to
+// sibling differs from the listed one; it must still be listed once. macOS
+// meets this without the symlink: t.TempDir() is below /var, a symlink to
+// /private/var.
+func TestRun_WorktreesSymlinkedRoot(t *testing.T) {
+	base, _ := worktreesFixture(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(base, link); err != nil {
+		t.Skip(err)
+	}
+	checkRepos(t, repoItems(t, baseOpts(link)), underRepo)
 }
 
 func TestRun_CancelClosesPromptly(t *testing.T) {

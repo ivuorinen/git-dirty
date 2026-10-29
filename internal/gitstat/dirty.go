@@ -151,7 +151,9 @@ func sameMtime(disk, entry time.Time) bool {
 }
 
 // hashWorktreeFile computes the blob id git would store for the file: its
-// content, or the link target for a symlink.
+// content, or the link target for a symlink. fi is the caller's Lstat;
+// OpenRegular refuses a file swapped in since, so a FIFO cannot block the
+// hash.
 func hashWorktreeFile(abs string, fi fs.FileInfo, isLink bool, f gitrepo.Format) (gitrepo.ObjectID, error) {
 	if isLink {
 		target, err := os.Readlink(abs)
@@ -161,7 +163,7 @@ func hashWorktreeFile(abs string, fi fs.FileInfo, isLink bool, f gitrepo.Format)
 
 		return f.HashObject(gitrepo.ObjBlob, []byte(filepath.ToSlash(target))), nil
 	}
-	file, err := os.Open(filepath.Clean(abs))
+	file, err := gitrepo.OpenRegular(abs)
 	if err != nil {
 		return gitrepo.ObjectID{}, err
 	}

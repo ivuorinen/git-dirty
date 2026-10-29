@@ -8,8 +8,8 @@ code in this repository.
 `git-dirty` is a Go CLI and TUI that walks a directory for git working trees and
 shows each one as a tree line: branch, dirty letters (`M S ? $`), ahead/behind
 against the upstream, and the comparison with the default branch. It replaces a
-bash script (`~/.local/bin/git-dirty.sh`) and keeps its flags and `GIT_DIRTY_*`
-environment variables.
+bash script, kept as `scripts/git-dirty.sh` for `bench` and `compare.sh`, and
+keeps its flags and `GIT_DIRTY_*` environment variables.
 
 ## Development Commands
 
@@ -43,7 +43,8 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   `index.go` and `splitindex.go` (v2-v4, TREE, split index with EWAH),
   `odb.go`, `pack.go` and `delta.go` (loose objects, packs, deltas, a 16 MiB
   base cache), `objects.go` (commit, tree, tag), `ignore.go` (gitignore
-  matcher).
+  matcher), `worktree.go` (the linked worktrees a repository records, each
+  checked to lead back to it).
 - **internal/gitstat/**: per-repository inspection on top of internal/git.
   `Inspect` returns a `Result` and puts every failure in `Result.Err`,
   prefixed with its stage name. It imports internal/git as `gitrepo`, because
@@ -57,7 +58,10 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
     late-bit recount.
   - `refs.go`: upstream mapping through fetch refspecs, and the default branch.
 - **internal/scan/**: discovery goroutine plus `GOMAXPROCS` workers. Every send
-  selects on `ctx.Done()`.
+  selects on `ctx.Done()`. A repository's linked worktrees are queued as its
+  children (`Item.Worktree`). A linked worktree the walk finds is held until
+  the walk ends and sent only if no repository listed it, compared with
+  `os.SameFile` because git records paths with symlinks resolved.
 - **internal/tree/**: builds the display tree and applies the verbose, depth and
   dirty-only filters.
 - **internal/render/**: tree lines become styled `Segment`s. Plain output writes
@@ -72,11 +76,12 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   to read git data; depguard in `.golangci.yml` fails on any other import.
 - **Everything internal/git reads may come from a hostile clone.** Keep the
   limits: `maxObjectSize` (256 MiB), `maxDeltaDepth` (10,000), delta copy
-  bounds, `maxEWAHBits`, `symrefMaxDepth` (5), `maxTagDepth` and
-  `maxTreeDepth`. Validate ref names with `ValidRefName` before they become
-  paths, since `branch.*.merge` comes from repository config. A decoder
-  returns an error and never panics; the fuzz targets in `fuzz_test.go` check
-  that, and a new decoder gets a fuzz target.
+  bounds, `maxEWAHBits`, `symrefMaxDepth` (5), `maxTagDepth`,
+  `maxTreeDepth` and `maxLinkFile` (4 KiB, regular files only, for `.git`
+  and `worktrees/<id>/gitdir` files). Validate ref names with `ValidRefName`
+  before they become paths, since `branch.*.merge` comes from repository
+  config. A decoder returns an error and never panics; the fuzz targets in
+  `fuzz_test.go` check that, and a new decoder gets a fuzz target.
 - **Never execute `git` or anything else at runtime.** No hooks, no filters, no
   fsmonitor. Tests may call `git`, because they use it as the oracle;
   forbidigo rejects `exec.Command` outside `_test.go` files.
@@ -89,10 +94,12 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
 - **The git CLI is the test oracle.** Tests build fixtures with `git` and
   compare against `git diff --quiet`, `git diff --cached --quiet`,
   `git ls-files --others --exclude-standard`, `git rev-list --left-right --count`,
-  `git check-ignore`, `git ls-files --stage`, `git config --get`, `git show-ref`
-  and `@{u}`. Object reads are checked by re-hashing the content. Add a
-  fixture there instead of a hand-written expected value. gitstat tables run
-  in SHA-1 and SHA-256 repositories through `forEachFormat`.
+  `git check-ignore`, `git ls-files --stage`, `git config --get`,
+  `git show-ref`, `@{u}`, `git worktree list --porcelain` and
+  `git rev-parse --git-dir`/`--git-common-dir`. Object reads are checked by
+  re-hashing the content. Add a fixture there instead of a hand-written
+  expected value. gitstat tables run in SHA-1 and SHA-256 repositories through
+  `forEachFormat`.
 - **Ahead/behind needs the late-bit recount.** Commits with equal timestamps,
   or clock skew, can deliver a tip's bit after a commit was counted;
   `walkState.add` uncounts and re-queues it. Mutating it away fails

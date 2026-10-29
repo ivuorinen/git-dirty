@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync"
 
+	gitrepo "github.com/ivuorinen/git-dirty/internal/git"
 	"github.com/ivuorinen/git-dirty/internal/gitstat"
 )
 
@@ -36,11 +37,12 @@ const (
 // Item is one scan event. Rel is the path below Root as components; the root
 // itself has an empty Rel.
 type Item struct {
-	Kind    Kind
-	Path    string
-	Rel     []string
-	Result  gitstat.Result
-	Message string
+	Kind     Kind
+	Path     string
+	Rel      []string
+	Result   gitstat.Result
+	Message  string
+	Worktree bool // a linked worktree listed under its repository; Rel ends in its ID
 }
 
 // Run scans in the background and returns the event stream, closed when the
@@ -73,7 +75,9 @@ func Run(ctx context.Context, opts Options) <-chan Item {
 		defer wg.Done()
 		defer close(jobs)
 		d := discoverer{ctx: ctx, opts: opts, out: out, jobs: jobs}
-		d.walk(opts.Root, nil)
+		if d.walk(opts.Root, nil) {
+			d.sendLinked()
+		}
 	}()
 	go func() {
 		wg.Wait()
@@ -93,11 +97,15 @@ func send(ctx context.Context, ch chan<- Item, it Item) bool {
 	}
 }
 
+// discoverer is used by the discovery goroutine alone.
 type discoverer struct {
 	ctx  context.Context
 	opts Options
 	out  chan<- Item
 	jobs chan<- Item
+
+	claimed []os.FileInfo // directories of the worktrees repositories listed
+	linked  []Item        // linked worktrees the walk found, held until it ends
 }
 
 // walk mirrors the bash script: a directory containing a .git entry is a
@@ -109,7 +117,7 @@ func (d *discoverer) walk(dir string, rel []string) bool {
 		return false
 	}
 	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
-		return send(d.ctx, d.jobs, Item{Path: dir, Rel: rel})
+		return d.repo(dir, rel)
 	}
 	if !send(d.ctx, d.out, Item{Kind: Dir, Path: dir, Rel: rel}) {
 		return false
@@ -140,6 +148,73 @@ func (d *discoverer) visit(dir string, rel []string, name string) bool {
 	}
 
 	return d.walk(child, childRel)
+}
+
+// repo queues the working tree at dir, then the linked worktrees it records
+// as its children. A linked worktree found by the walk is held instead: the
+// repository that lists it may come later in the walk.
+func (d *discoverer) repo(dir string, rel []string) bool {
+	wts, linked, err := gitrepo.ListWorktrees(dir)
+	if linked {
+		d.linked = append(d.linked, Item{Path: dir, Rel: rel})
+
+		return true
+	}
+	if !send(d.ctx, d.jobs, Item{Path: dir, Rel: rel}) {
+		return false
+	}
+	if err != nil {
+		return d.warn(dir, rel, fmt.Sprintf("cannot list worktrees: %v", err))
+	}
+	for _, wt := range wts {
+		if !d.worktree(rel, wt) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// worktree queues one listed worktree, or reports it uninspected when it
+// cannot be inspected.
+func (d *discoverer) worktree(rel []string, wt gitrepo.Worktree) bool {
+	it := Item{Path: wt.Path, Rel: slices.Concat(rel, []string{wt.ID}), Worktree: true}
+	if wt.Err != nil {
+		it.Kind = Repo
+		it.Result = gitstat.Result{Path: wt.Path, Err: fmt.Errorf("worktree: %w", wt.Err)}
+
+		return send(d.ctx, d.out, it)
+	}
+	if fi, err := os.Stat(wt.Path); err == nil {
+		d.claimed = append(d.claimed, fi)
+	}
+
+	return send(d.ctx, d.jobs, it)
+}
+
+// sendLinked queues each held linked worktree that no repository in the scan
+// listed, at its own place in the walk.
+func (d *discoverer) sendLinked() {
+	for _, it := range d.linked {
+		if d.isClaimed(it.Path) {
+			continue
+		}
+		if !send(d.ctx, d.jobs, it) {
+			return
+		}
+	}
+}
+
+// isClaimed reports whether dir is a worktree some repository listed. The
+// listed paths have symlinks resolved and the walk's do not, so files are
+// compared, not names.
+func (d *discoverer) isClaimed(dir string) bool {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+
+	return slices.ContainsFunc(d.claimed, func(c os.FileInfo) bool { return os.SameFile(c, fi) })
 }
 
 // skipReason is the warning for a subdirectory that is not entered, or "".

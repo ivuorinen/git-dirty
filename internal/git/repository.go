@@ -3,11 +3,20 @@ package git
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
+
+// maxLinkFile caps a .git file or a worktrees/<id>/gitdir file: each holds
+// one path.
+const maxLinkFile = 4096
+
+// errNotRegular refuses a file that is not a regular file.
+var errNotRegular = errors.New("not a regular file")
 
 // Repository is an opened git directory. It is not safe for concurrent use;
 // each goroutine opens its own. Close releases its open files.
@@ -84,22 +93,92 @@ func findGitDir(worktree string) (string, error) {
 	if fi.IsDir() {
 		return p, nil
 	}
-	if !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("%s: neither a directory nor a gitdir file", p)
-	}
-	b, err := os.ReadFile(filepath.Clean(p))
+	dir, err := readLinkFile(p, "gitdir:")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%s: %w", p, err)
 	}
-	line, _, _ := strings.Cut(string(b), "\n")
-	rest, ok := strings.CutPrefix(strings.TrimSpace(line), "gitdir:")
-	if !ok {
-		return "", fmt.Errorf("%s: missing \"gitdir:\" line", p)
-	}
-	dir := strings.TrimSpace(rest)
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(worktree, dir)
 	}
 
 	return filepath.Clean(dir), nil
+}
+
+// OpenRegular opens p for reading if the opened file is a regular file. A
+// caller's Lstat can be raced: the path can be swapped for a FIFO, whose open
+// waits for a writer, or for a link to a device, whose read can block.
+// O_NONBLOCK returns the FIFO open at once, the handle's Stat then refuses
+// both, and a regular file reads the same with it. Windows ignores the flag:
+// syscall.Open passes only the high 12 flag bits on to CreateFile.
+func OpenRegular(p string) (*os.File, error) {
+	f, err := os.OpenFile(filepath.Clean(p), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = &fs.PathError{Op: "open", Path: p, Err: errNotRegular}
+	}
+	if err != nil {
+		_ = f.Close() // read-only
+
+		return nil, err
+	}
+
+	return f, nil
+}
+
+// readLinkFile reads a file that holds one path: a .git file ("gitdir:
+// <path>") or a worktrees/<id>/gitdir file (no prefix). Only a regular file
+// of at most maxLinkFile bytes is read, so a FIFO or a link to a device
+// cannot block or flood the scan: the Lstat refuses a symlink, which
+// OpenRegular would follow, and OpenRegular a file swapped in after the
+// Lstat. The error does not name p; callers do.
+func readLinkFile(p, prefix string) (string, error) {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return "", pathless(err)
+	}
+	if !fi.Mode().IsRegular() {
+		return "", errNotRegular
+	}
+	f, err := OpenRegular(p)
+	if err != nil {
+		return "", pathless(err)
+	}
+	defer func() { _ = f.Close() }() // read-only
+	b, err := io.ReadAll(io.LimitReader(f, maxLinkFile+1))
+	if err != nil {
+		return "", pathless(err)
+	}
+	if len(b) > maxLinkFile {
+		return "", fmt.Errorf("larger than %d bytes", maxLinkFile)
+	}
+
+	return parseLinkFile(b, prefix)
+}
+
+// parseLinkFile returns the path on the first line of b, after prefix.
+func parseLinkFile(b []byte, prefix string) (string, error) {
+	line, _, _ := strings.Cut(string(b), "\n")
+	rest, ok := strings.CutPrefix(strings.TrimSpace(line), prefix)
+	if !ok {
+		return "", fmt.Errorf("missing %q line", prefix)
+	}
+	dir := strings.TrimSpace(rest)
+	if dir == "" {
+		return "", errors.New("empty path")
+	}
+
+	return dir, nil
+}
+
+// pathless drops the path an *fs.PathError carries, keeping its cause.
+func pathless(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+
+	return err
 }

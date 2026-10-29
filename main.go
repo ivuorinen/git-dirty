@@ -215,7 +215,9 @@ func (p *progress) report(it scan.Item) {
 		p.clearLine()
 		printf(p.w, "%s: %s: %s\n", programName, render.Sanitize(it.Path), it.Message)
 	case it.Kind == scan.Repo:
-		p.found++
+		if !it.Worktree { // as in the summary, worktrees are not repositories
+			p.found++
+		}
 		if p.verbose && it.Result.Err != nil {
 			p.clearLine()
 			printf(
@@ -464,6 +466,7 @@ func writeHelp(w io.Writer, cfg config.Config) {
 		"  ? = Untracked files (off with GIT_DIRTY_CHECK_UNTRACKED=0)\n" +
 		"  $ = Stashed changes (with -a)\n" +
 		"  ↑N ↓N = Commits ahead of / behind the upstream\n" +
+		"  🌳 = Linked worktree, listed under its repository\n" +
 		"\n" +
 		"Configuration: %[7]s\n" +
 		"and GIT_DIRTY_* environment variables; flags override both.\n" +

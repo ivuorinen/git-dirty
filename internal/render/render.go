@@ -30,11 +30,13 @@ const (
 	Error               // error text
 )
 
-// Icons, as in the bash script.
+// Icons. The first three are the bash script's; IconWorktree marks a linked
+// worktree, ahead of its state icon.
 const (
-	IconClean  = "✅"
-	IconDirty  = "❌"
-	IconNotGit = "⚠️"
+	IconClean    = "✅"
+	IconDirty    = "❌"
+	IconNotGit   = "⚠️"
+	IconWorktree = "🌳"
 )
 
 // Segment is a run of text with one style.
@@ -64,6 +66,9 @@ func Line(l tree.Line, o Options) []Segment {
 		return append(segs, Segment{IconNotGit, NotGit}, Segment{Text: " " + name})
 	}
 	r := n.Repo
+	if n.Worktree {
+		segs = append(segs, Segment{Text: IconWorktree + " "})
+	}
 	segs = append(segs, stateIcon(r), Segment{Text: " " + name})
 	if letters := statusLetters(r.Status); letters != "" {
 		segs = append(segs, Segment{Text: " "}, Segment{"[" + letters + "]", Status})
@@ -244,7 +249,8 @@ func WriteSegments(w io.Writer, segs []Segment, color bool) error {
 func Header(root string, o Options) []string {
 	lines := []string{
 		"Checking repositories in: " + Sanitize(root),
-		"Legend: " + IconClean + " Clean repo | " + IconDirty + " Dirty repo | " + IconNotGit + " Directory / error",
+		"Legend: " + IconClean + " Clean repo | " + IconDirty + " Dirty repo | " + IconWorktree + " Worktree | " +
+			IconNotGit + " Directory / error",
 	}
 	if o.ShowBranch {
 		lines = append(lines, "Showing non-standard branches (hiding "+strings.Join(o.MainBranches, " ")+")")

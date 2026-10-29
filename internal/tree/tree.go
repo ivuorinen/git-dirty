@@ -17,6 +17,7 @@ type Node struct {
 	Path     string
 	Rel      []string
 	Repo     *gitstat.Result // nil for a plain directory
+	Worktree bool            // a linked worktree listed under its repository
 	children []*Node
 	sorted   bool
 }
@@ -36,7 +37,8 @@ func New(rootPath string) *Tree {
 	return &Tree{root: root, nodes: map[string]*Node{"": root}}
 }
 
-// Repos returns how many repositories were added.
+// Repos returns how many repositories were added. Worktrees listed under
+// their repository are not repositories and are not counted.
 func (t *Tree) Repos() int { return t.repos }
 
 // Add records a directory or repository item; warnings are ignored.
@@ -50,10 +52,11 @@ func (t *Tree) Add(it scan.Item) {
 	}
 	if it.Kind == scan.Repo {
 		res := it.Result
-		if n.Repo == nil {
+		if n.Repo == nil && !it.Worktree {
 			t.repos++
 		}
 		n.Repo = &res
+		n.Worktree = it.Worktree
 	}
 }
 
@@ -121,11 +124,12 @@ func (t *Tree) appendChildren(out *[]Line, n *Node, indent string, f Filter) {
 }
 
 // visible decides whether n is listed: repositories pass the dirty filter;
-// directories are listed when something below them is, or, in verbose mode
-// without the dirty filter, when within the depth limit.
+// repositories and directories are listed when something below them is (a
+// repository's children are its worktrees); directories also, in verbose
+// mode without the dirty filter, when within the depth limit.
 func (t *Tree) visible(n *Node, f Filter) bool {
-	if n.Repo != nil {
-		return !f.DirtyOnly || n.Repo.Dirty() || n.Repo.Err != nil
+	if n.Repo != nil && (!f.DirtyOnly || n.Repo.Dirty() || n.Repo.Err != nil) {
+		return true
 	}
 	for _, c := range n.children {
 		if t.visible(c, f) {
@@ -133,5 +137,5 @@ func (t *Tree) visible(n *Node, f Filter) bool {
 		}
 	}
 
-	return f.Verbose && !f.DirtyOnly && len(n.Rel) <= f.Depth
+	return n.Repo == nil && f.Verbose && !f.DirtyOnly && len(n.Rel) <= f.Depth
 }

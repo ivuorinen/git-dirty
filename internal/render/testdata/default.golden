@@ -1,5 +1,5 @@
 Checking repositories in: /home/u/Code
-Legend: ✅ Clean repo | ❌ Dirty repo | ⚠️ Directory / error
+Legend: ✅ Clean repo | ❌ Dirty repo | 🌳 Worktree | ⚠️ Directory / error
 Showing non-standard branches (hiding main master trunk)
 ---------------------------------------------------------
 ⚠️ /home/u/Code
@@ -9,8 +9,11 @@ Showing non-standard branches (hiding main master trunk)
 ├── ⚠️ ivuorinen
 │   ├── ⚠️ broken ! index: unknown extension
 │   ├── ✅ dotfiles ↓3
+│   │   └── 🌳 ❌ hotfix [M] (hotfix ↑1)
 │   ├── ❌ gh-history ↑1
 │   └── ❌ git-dirty [M?] (feature/tree ↑2) · main ↓4 · vs main ↑5 ↓1
+│       ├── 🌳 ✅ feat (feat, no upstream)
+│       └── 🌳 ⚠️ old ! worktree: gitdir file points to non-existent location
 ├── ✅ scratch (wip, no upstream) · vs main ↑0 ↓0
 └── ✅ tagged (v1.0)
 
