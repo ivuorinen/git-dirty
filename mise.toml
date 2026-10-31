@@ -124,12 +124,15 @@ run = ["go get -u -t ./...", "go mod tidy", "mise upgrade --bump --local"]
 # Pushing the tag is the release: the release workflow builds, signs and
 # publishes it. HEAD must be exactly origin/main. A tag carries the commits it
 # points at, so tagging unpushed work would publish commits that are not on
-# main and that CI has not run on. --v0 keeps a breaking change to a minor bump
-# while the version is 0.x. --tag.pattern 'v*' makes svu skip the old CalVer
-# tags, which it would otherwise read as v2026.x.y; with no v tag yet, svu
-# fails and the task stops, because the first semver tag is made by hand. A
-# failed push deletes the local tag: svu reads local tags, so a tag left behind
-# would be taken as the current version and the rerun would stop on it.
+# main and that CI has not run on. --tag.mode current reads only the tags HEAD
+# contains; svu's default reads every branch, so a tag that is not on main,
+# fetched or made locally, would set the version. --v0 keeps a breaking change
+# to a minor bump while the version is 0.x. --tag.pattern 'v*' makes svu skip
+# the old CalVer tags, which it would otherwise read as v2026.x.y; with no v
+# tag yet, svu fails and the task stops, because the first semver tag is made
+# by hand. A failed push deletes the local tag: svu reads local tags, so a tag
+# left behind would be taken as the current version and the rerun would stop
+# on it.
 [tasks.release]
 description = "Tag the next version and push it; the release workflow publishes it"
 run = '''
@@ -146,7 +149,7 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
   echo "Error: main is not the same commit as origin/main" >&2
   exit 1
 fi
-tag=$(svu next --v0 --tag.pattern 'v*')
+tag=$(svu next --tag.mode current --v0 --tag.pattern 'v*')
 echo "Releasing $tag..."
 git tag -a "$tag" -m "Release $tag"
 if ! git push origin "$tag"; then
