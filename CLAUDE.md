@@ -113,14 +113,20 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   `.editorconfig`. The TUI golden test trims the viewport's padding.
 - `go.mod`'s `toolchain` line is the single Go version source, read by mise and
   by setup-go.
+- **Commit types set the release version.** svu computes the next version from
+  them, so type a commit by what it changes for users: a `feat:` or a `!`
+  releases a new minor version. README "Releasing" lists which type releases
+  what.
 
 ## Build & Release
 
 - `.goreleaser.yaml`: gh-history's layout. Its before-hook generates
   `THIRD_PARTY_NOTICES.txt` with `go-licenses` v2.0.1 and `notices.tpl`, and the
   release attaches that file and `LICENSE`.
-- `.github/workflows/release.yml` runs on CalVer tags (`20*`); `mise run
-  release` creates the tag.
+- Releases use Semantic Versioning tags (`v0.2.0`), the only version form
+  `go install` understands. `.github/workflows/release.yml` runs on `v*.*.*`
+  tags; `mise run release` tags the next version with svu. The first SemVer
+  tag is made by hand (README "Releasing").
 - `.github/workflows/ci.yml` runs the mise tasks on Linux and `go test` on
   macOS and Windows.
 - `.github/workflows/codeql.yml` runs CodeQL for Go and Actions.

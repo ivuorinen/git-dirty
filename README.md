@@ -226,8 +226,36 @@ and the run looks stalled:
 go test ./internal/git/ -run '^$' -fuzz '^FuzzIndex$' -fuzztime=60s -fuzzminimizetime=5s
 ```
 
-Releases are CalVer tags (`mise run release`). GoReleaser builds and signs them
-in GitHub Actions.
+## Releasing
+
+Releases use Semantic Versioning tags (`v0.2.0`), the only version form
+`go install` understands. Pushing a tag is the release: the release workflow
+builds the binaries with GoReleaser, signs the checksums file with cosign, and
+publishes the GitHub release.
+
+```sh
+mise run release
+```
+
+The task requires a clean `main` that is the same commit as `origin/main`. It
+fetches `origin` first and stops if either is not true.
+
+[svu](https://github.com/caarlos0/svu) picks the version from the commit
+messages since the last tag: `fix:` bumps the patch version, `feat:` the minor
+version, and a breaking change (`feat!:`, `fix!:` or a `BREAKING CHANGE:`
+footer) the minor version while the version is 0.x. When no commit since the
+last tag calls for a release, svu prints the current tag, and `git tag` stops
+the task because that tag already exists.
+
+The first release had a CalVer tag (`2026.10.0`), which svu ignores. With no
+SemVer tag to start from, svu stops the task, so the first one is made once by
+hand:
+
+```sh
+git switch main && git pull --ff-only
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
 
 ## License
 
