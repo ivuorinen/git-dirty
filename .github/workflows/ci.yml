@@ -3,8 +3,10 @@
 name: CI
 
 on:
+  # Renovate automerges branches without opening a PR, and waits for checks on
+  # the branch commit, so its branches need a push trigger of their own.
   push:
-    branches: ["main"]
+    branches: ["main", "renovate/**"]
   pull_request:
     branches: ["main"]
   merge_group:
