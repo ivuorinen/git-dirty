@@ -244,8 +244,8 @@ fetches `origin` first and stops if either is not true.
 messages since the last tag: `fix:` bumps the patch version, `feat:` the minor
 version, and a breaking change (`feat!:`, `fix!:` or a `BREAKING CHANGE:`
 footer) the minor version while the version is 0.x. When no commit since the
-last tag calls for a release, svu prints the current tag, and `git tag` stops
-the task because that tag already exists.
+last tag calls for a release, svu prints the current tag, and the task stops
+with "Nothing to release" before it tags anything.
 
 The release notes list the commits by type, under Features, Bug fixes,
 Refactoring, Build, CI and Chores; commits of any other type, and merge

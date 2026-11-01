@@ -150,6 +150,11 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
   exit 1
 fi
 tag=$(svu next --tag.mode current --v0 --tag.pattern 'v*')
+# svu next prints the current tag when no commit calls for a new version.
+if [ "$tag" = "$(svu current --tag.mode current --tag.pattern 'v*')" ]; then
+  echo "Nothing to release: no commit since $tag calls for a new version" >&2
+  exit 1
+fi
 echo "Releasing $tag..."
 git tag -a "$tag" -m "Release $tag"
 if ! git push origin "$tag"; then
