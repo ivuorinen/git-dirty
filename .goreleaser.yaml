@@ -39,10 +39,33 @@ archives:
 
 changelog:
   sort: asc
+  # The patterns match a Conventional Commits subject: the type, an optional
+  # scope and an optional breaking-change "!". A commit goes to the first group,
+  # by order, that matches it; Others takes the rest, such as merge commits.
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
+      - '^(docs|test)(\([^)]+\))?!?:'
+  groups:
+    - title: Features
+      regexp: '^feat(\([^)]+\))?!?:'
+      order: 0
+    - title: Bug fixes
+      regexp: '^fix(\([^)]+\))?!?:'
+      order: 1
+    - title: Refactoring
+      regexp: '^refactor(\([^)]+\))?!?:'
+      order: 2
+    - title: Build
+      regexp: '^build(\([^)]+\))?!?:'
+      order: 3
+    - title: CI
+      regexp: '^ci(\([^)]+\))?!?:'
+      order: 4
+    - title: Chores
+      regexp: '^chore(\([^)]+\))?!?:'
+      order: 5
+    - title: Others
+      order: 999
 
 signs:
   - cmd: cosign

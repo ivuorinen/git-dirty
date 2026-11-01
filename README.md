@@ -247,6 +247,10 @@ footer) the minor version while the version is 0.x. When no commit since the
 last tag calls for a release, svu prints the current tag, and `git tag` stops
 the task because that tag already exists.
 
+The release notes list the commits by type, under Features, Bug fixes,
+Refactoring, Build, CI and Chores; commits of any other type, and merge
+commits, go under Others. `docs` and `test` commits are left out.
+
 The first release had a CalVer tag (`2026.10.0`), which svu ignores. With no
 SemVer tag to start from, svu stops the task, so the first one is made once by
 hand:
