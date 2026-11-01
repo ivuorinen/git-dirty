@@ -18,7 +18,10 @@ checked-out branch has diverged from the default branch.
 ├── 🪵 plain.git (2 worktrees)
 │   ├── 🌳 ❌ plain-feat [M] (feat, no upstream) · vs main ↑1 ↓0
 │   └── 🌳 ✅ plain-main
-└── ✅ scratch (wip, no upstream) · vs main ↑0 ↓0
+├── ✅ scratch (wip, no upstream) · vs main ↑0 ↓0
+└── 📁 work
+    ├── ✅ api
+    └── ✅ web ↓2
 ```
 
 It is a single static binary. It reads git's on-disk formats itself (config,
@@ -79,7 +82,8 @@ a usage error, 130 when interrupted.
 | Part | Meaning |
 | --- | --- |
 | ✅ / ❌ | Clean / dirty. Dirty means any status letter is set, or there are commits not pushed to the upstream. Being behind does not make a repository dirty. |
-| ⚠️ | A directory without a repository, or a repository that could not be read (`! <error>`) |
+| 📁 | A directory that is not a repository, with no dirty or unreadable repository or worktree anywhere below it. Repositories that are only behind their upstream do not change it. |
+| ⚠️ | A repository that could not be read (`! <error>`), or a directory with a dirty or unreadable repository or worktree below it: the directories the `f` view keeps |
 | 🌳 | A linked worktree (`git worktree add`), listed under its repository, before its own ✅, ❌ or ⚠️ and the parts below. Its name is its ID under `.git/worktrees/` (`<bare>/worktrees/` for a bare repository), which git takes from the directory name. |
 | 🪵 | A bare repository: a git directory with no working tree, such as one made by `git clone --bare`, or a `.git` whose config sets `core.bare = true`. It has no status letters, branch or ✅/❌; its linked worktrees are listed under it, marked 🌳. |
 | `(N worktrees)` | After 🪵, how many linked worktrees the bare repository records, stale ones included. It stays the same when `f` hides some. When they cannot be listed, `! worktrees: <error>` replaces it. |
@@ -185,6 +189,7 @@ Ignore rules follow git's: `core.excludesFile` (default
 | Stash check reads the loose `refs/stash` file only | Packed refs are found too |
 | A linked worktree is listed only where the scan finds it, as a repository | Every linked worktree is listed under its repository, marked 🌳 |
 | A bare repository's folder is walked into, and its worktrees are listed on their own | A bare repository is listed with 🪵, its worktrees under it |
+| Every directory is marked ⚠️ | A directory is marked 📁, or ⚠️ when a repository below it is dirty or unreadable |
 
 ## Known limitations
 

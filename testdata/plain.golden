@@ -1,5 +1,5 @@
 Checking repositories in: <root>
-Legend: ✅ Clean repo | ❌ Dirty repo | 🪵 Bare repo | 🌳 Worktree | ⚠️ Directory / error
+Legend: ✅ Clean repo | ❌ Dirty repo | 🪵 Bare repo | 🌳 Worktree | 📁 Folder | ⚠️ Problem below / error
 Showing non-standard branches (hiding main master trunk)
 ---------------------------------------------------------
 ⚠️ <root>
@@ -8,7 +8,7 @@ Showing non-standard branches (hiding main master trunk)
 ├── ❌ beta [M]
 ├── 🪵 delta.git (1 worktree)
 │   └── 🌳 ✅ delta-wt (delta-side, no upstream) · vs main ↑0 ↓0
-└── ⚠️ group
+└── 📁 group
     └── ✅ gamma (feature, no upstream) · vs main ↑1 ↓0
 
 Found 4 git repositories in <elapsed>

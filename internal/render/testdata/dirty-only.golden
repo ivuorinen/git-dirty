@@ -1,5 +1,5 @@
 Checking repositories in: /home/u/Code
-Legend: ✅ Clean repo | ❌ Dirty repo | 🪵 Bare repo | 🌳 Worktree | ⚠️ Directory / error
+Legend: ✅ Clean repo | ❌ Dirty repo | 🪵 Bare repo | 🌳 Worktree | 📁 Folder | ⚠️ Problem below / error
 Showing non-standard branches (hiding main master trunk)
 ---------------------------------------------------------
 ⚠️ /home/u/Code
@@ -15,4 +15,4 @@ Showing non-standard branches (hiding main master trunk)
     └── 🪵 plain.git (2 worktrees)
         └── 🌳 ❌ plain-feat [M] (feat, no upstream)
 
-Found 13 git repositories in 0.21s
+Found 14 git repositories in 0.21s

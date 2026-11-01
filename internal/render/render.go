@@ -24,7 +24,7 @@ const (
 	Plain  Style = iota // unstyled text
 	Clean               // ✅ icon
 	Dirty               // ❌ icon
-	NotGit              // ⚠️ icon for directories and errors
+	NotGit              // ⚠️ icon for errors and directories with a problem below
 	Status              // [MS?$]
 	Branch              // branch names and ahead/behind counts
 	Error               // error text
@@ -32,13 +32,15 @@ const (
 
 // Icons. The first three are the bash script's; IconWorktree marks a linked
 // worktree, ahead of its state icon; IconBare marks a bare repository, which
-// has no state icon, being without a working tree.
+// has no state icon, being without a working tree; IconFolder marks a
+// directory with no problem below it, where the script prints IconNotGit.
 const (
 	IconClean    = "✅"
 	IconDirty    = "❌"
 	IconNotGit   = "⚠️"
 	IconWorktree = "🌳"
 	IconBare     = "🪵"
+	IconFolder   = "📁"
 )
 
 // Segment is a run of text with one style.
@@ -65,7 +67,12 @@ func Line(l tree.Line, o Options) []Segment {
 	name = Sanitize(name)
 
 	if n.Repo == nil {
-		return append(segs, Segment{IconNotGit, NotGit}, Segment{Text: " " + name})
+		icon := Segment{Text: IconFolder}
+		if n.Problem() {
+			icon = Segment{IconNotGit, NotGit}
+		}
+
+		return append(segs, icon, Segment{Text: " " + name})
 	}
 	r := n.Repo
 	if r.Bare {
@@ -275,7 +282,7 @@ func Header(root string, o Options) []string {
 	lines := []string{
 		"Checking repositories in: " + Sanitize(root),
 		"Legend: " + IconClean + " Clean repo | " + IconDirty + " Dirty repo | " + IconBare + " Bare repo | " +
-			IconWorktree + " Worktree | " + IconNotGit + " Directory / error",
+			IconWorktree + " Worktree | " + IconFolder + " Folder | " + IconNotGit + " Problem below / error",
 	}
 	if o.ShowBranch {
 		lines = append(lines, "Showing non-standard branches (hiding "+strings.Join(o.MainBranches, " ")+")")

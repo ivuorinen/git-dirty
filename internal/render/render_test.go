@@ -134,6 +134,12 @@ func fixture() *tree.Tree {
 		}),
 		bare("single.git"),
 		worktree("single.git/wt", gitstat.Result{Head: onBranch(mainBranch)}),
+		// A folder of clean repositories, one behind its upstream: 📁, not ⚠️.
+		dir("clean-group"),
+		repo("clean-group/ok", gitstat.Result{
+			Head:     onBranch(mainBranch),
+			Upstream: &gitstat.Tracking{Ref: originMain, Behind: 3},
+		}),
 	} {
 		t.Add(it)
 	}

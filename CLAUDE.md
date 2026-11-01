@@ -69,7 +69,9 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   the walk ends and sent only if no repository listed it, compared with
   `os.SameFile` because git records paths with symlinks resolved.
 - **internal/tree/**: builds the display tree and applies the verbose, depth and
-  dirty-only filters.
+  dirty-only filters. `Node.Problem` (a dirty or unreadable repository or
+  worktree below) is the dirty-only rule and also picks a directory's icon:
+  📁, or ⚠️ with a problem below.
 - **internal/render/**: tree lines become styled `Segment`s. Plain output writes
   ANSI codes; the TUI styles the same segments with lipgloss. `Sanitize` escapes
   control bytes in every string that comes from a repository.

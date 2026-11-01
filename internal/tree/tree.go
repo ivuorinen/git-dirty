@@ -136,12 +136,30 @@ func (t *Tree) appendChildren(out *[]Line, n *Node, indent string, f Filter) {
 	}
 }
 
+// Problem reports whether a repository or worktree anywhere below n is dirty
+// or could not be read: what the dirty filter keeps, and what turns a
+// directory's icon into a warning. Being behind is not a problem.
+func (n *Node) Problem() bool {
+	for _, c := range n.children {
+		if (c.Repo != nil && failing(c.Repo)) || c.Problem() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// failing is the dirty filter's test for one repository or worktree.
+func failing(r *gitstat.Result) bool {
+	return r.Dirty() || r.Err != nil
+}
+
 // visible decides whether n is listed: repositories pass the dirty filter;
 // repositories and directories are listed when something below them is (a
 // repository's children are its worktrees); directories also, in verbose
 // mode without the dirty filter, when within the depth limit.
 func (t *Tree) visible(n *Node, f Filter) bool {
-	if n.Repo != nil && (!f.DirtyOnly || n.Repo.Dirty() || n.Repo.Err != nil) {
+	if n.Repo != nil && (!f.DirtyOnly || failing(n.Repo)) {
 		return true
 	}
 	for _, c := range n.children {
