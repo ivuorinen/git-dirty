@@ -39,10 +39,35 @@ archives:
 
 changelog:
   sort: asc
+  # The patterns match a Conventional Commits subject: the type, an optional
+  # scope and an optional breaking-change "!". (?i) ignores the type's case, as
+  # svu does, so a "Feat:" commit is listed with the features it is released as.
+  # A commit goes to the first group, by order, that matches it; Others takes
+  # the rest, such as merge commits.
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
+      - '(?i)^(docs|test)(\([^)]+\))?!?:'
+  groups:
+    - title: Features
+      regexp: '(?i)^feat(\([^)]+\))?!?:'
+      order: 0
+    - title: Bug fixes
+      regexp: '(?i)^fix(\([^)]+\))?!?:'
+      order: 1
+    - title: Refactoring
+      regexp: '(?i)^refactor(\([^)]+\))?!?:'
+      order: 2
+    - title: Build
+      regexp: '(?i)^build(\([^)]+\))?!?:'
+      order: 3
+    - title: CI
+      regexp: '(?i)^ci(\([^)]+\))?!?:'
+      order: 4
+    - title: Chores
+      regexp: '(?i)^chore(\([^)]+\))?!?:'
+      order: 5
+    - title: Others
+      order: 999
 
 signs:
   - cmd: cosign
