@@ -121,6 +121,29 @@ func TestListWorktrees(t *testing.T) {
 	}
 }
 
+// TestListWorktrees_BareRepository lists from a folder that is itself the
+// git directory, including a worktree whose files are inside that folder.
+func TestListWorktrees_BareRepository(t *testing.T) {
+	for _, f := range formats {
+		t.Run(f.Name, func(t *testing.T) {
+			plain := filepath.Join(bareLayouts(t, f), "plain.git")
+			wts, linked, err := ListWorktrees(plain)
+			if err != nil || linked {
+				t.Fatalf("ListWorktrees: linked %v, err %v", linked, err)
+			}
+			want := porcelain(t, plain)
+			if len(want) != 2 || len(wts) != len(want) {
+				t.Fatalf("listed %d worktrees, git lists %d (want 2): %+v", len(wts), len(want), wts)
+			}
+			for _, wt := range wts {
+				if checkListed(t, wt, want) {
+					t.Errorf("%s: git marks it prunable", wt.ID)
+				}
+			}
+		})
+	}
+}
+
 func TestListWorktrees_Linked(t *testing.T) {
 	if wts, linked, err := ListWorktrees(newRepo(t, SHA1)); len(wts) != 0 || linked || err != nil {
 		t.Errorf("no worktrees: got %+v, %v, %v", wts, linked, err)

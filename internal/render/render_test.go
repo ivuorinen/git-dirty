@@ -51,6 +51,11 @@ func worktree(rel string, res gitstat.Result) scan.Item {
 	return it
 }
 
+// bare is a bare repository: a result with nothing but Bare set.
+func bare(rel string) scan.Item {
+	return repo(rel, gitstat.Result{Bare: true})
+}
+
 func dir(rel string) scan.Item {
 	if rel == "" {
 		return scan.Item{Kind: scan.Dir, Path: root}
@@ -113,6 +118,22 @@ func fixture() *tree.Tree {
 		dir("deep/a"),
 		dir("deep/a/b"),
 		repo("a\x1b[2Jb", gitstat.Result{Head: onBranch(mainBranch)}),
+		// Bare repositories with 2, 0 and 1 worktrees; plain.git's dirty
+		// worktree keeps it in the dirty filter, with the count unchanged.
+		bare("ivuorinen/plain.git"),
+		worktree("ivuorinen/plain.git/plain-feat", gitstat.Result{
+			Head: onBranch("feat"), Status: gitstat.Status{Modified: true},
+		}),
+		worktree("ivuorinen/plain.git/plain-main", gitstat.Result{Head: onBranch(mainBranch)}),
+		bare("lonely.git"),
+		// A bare repository whose worktrees could not be listed: the error,
+		// not a count of none.
+		repo("ivuorinen/locked.git", gitstat.Result{
+			Bare: true,
+			Err:  errors.New("worktrees: open worktrees: permission denied"),
+		}),
+		bare("single.git"),
+		worktree("single.git/wt", gitstat.Result{Head: onBranch(mainBranch)}),
 	} {
 		t.Add(it)
 	}

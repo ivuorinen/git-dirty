@@ -111,6 +111,10 @@ func TestRunPlain_Golden(t *testing.T) {
 	repoWithCommit(t, alpha)
 	// Found by the walk too, but listed once: under alpha, with 🌳.
 	gitIn(t, alpha, "worktree", "add", "-q", "-b", "side", filepath.Join(root, "alpha-side"))
+	// A bare clone with a worktree the walk also finds: listed once, under it.
+	gitIn(t, root, "clone", "-q", "--bare", alpha, filepath.Join(root, "delta.git"))
+	gitIn(t, filepath.Join(root, "delta.git"), "worktree", "add", "-q", "-b", "delta-side",
+		filepath.Join(root, "delta-wt"))
 	beta := filepath.Join(root, "beta")
 	repoWithCommit(t, beta)
 	if err := os.WriteFile(filepath.Join(beta, "a.txt"), []byte("changed\n"), 0o600); err != nil {

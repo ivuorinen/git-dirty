@@ -186,3 +186,16 @@ func TestReadConfigFile_Missing(t *testing.T) {
 		t.Error("empty config has a key")
 	}
 }
+
+// TestReadConfigFile_NullDevice: git reads the null device as an empty
+// config (GIT_CONFIG_GLOBAL=/dev/null is its documented way to skip the
+// global config), so the refusal of devices must not reach it.
+func TestReadConfigFile_NullDevice(t *testing.T) {
+	cfg, err := ReadConfigFile(os.DevNull)
+	if err != nil || cfg == nil {
+		t.Fatalf("%s: %v, %v", os.DevNull, cfg, err)
+	}
+	if _, ok := cfg.Get(secCore, "", "bare"); ok {
+		t.Error("the null device's config has a key")
+	}
+}

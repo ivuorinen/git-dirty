@@ -15,6 +15,9 @@ checked-out branch has diverged from the default branch.
 │   ├── ✅ dotfiles ↓3
 │   ├── ❌ gh-history ↑1
 │   └── ⚠️ broken ! index: unknown extension
+├── 🪵 plain.git (2 worktrees)
+│   ├── 🌳 ❌ plain-feat [M] (feat, no upstream) · vs main ↑1 ↓0
+│   └── 🌳 ✅ plain-main
 └── ✅ scratch (wip, no upstream) · vs main ↑0 ↓0
 ```
 
@@ -77,7 +80,9 @@ a usage error, 130 when interrupted.
 | --- | --- |
 | ✅ / ❌ | Clean / dirty. Dirty means any status letter is set, or there are commits not pushed to the upstream. Being behind does not make a repository dirty. |
 | ⚠️ | A directory without a repository, or a repository that could not be read (`! <error>`) |
-| 🌳 | A linked worktree (`git worktree add`), listed under its repository, before its own ✅, ❌ or ⚠️ and the parts below. Its name is its ID under `.git/worktrees/`, which git takes from the directory name. |
+| 🌳 | A linked worktree (`git worktree add`), listed under its repository, before its own ✅, ❌ or ⚠️ and the parts below. Its name is its ID under `.git/worktrees/` (`<bare>/worktrees/` for a bare repository), which git takes from the directory name. |
+| 🪵 | A bare repository: a git directory with no working tree, such as one made by `git clone --bare`, or a `.git` whose config sets `core.bare = true`. It has no status letters, branch or ✅/❌; its linked worktrees are listed under it, marked 🌳. |
+| `(N worktrees)` | After 🪵, how many linked worktrees the bare repository records, stale ones included. It stays the same when `f` hides some. When they cannot be listed, `! worktrees: <error>` replaces it. |
 | `M` | Worktree differs from the index (`git diff --quiet` would fail) |
 | `S` | Index differs from HEAD (`git diff --cached --quiet` would fail) |
 | `?` | Untracked files that are not ignored (on by default; `GIT_DIRTY_CHECK_UNTRACKED=0` turns it off) |
@@ -150,9 +155,10 @@ keys are an error. Every key is optional:
 
 A directory is skipped when its name is in the exclude list or it contains a
 file named `.ignore`. To hide a repository, add an empty `.ignore` next to its
-`.git`, and list `.ignore` in your global gitignore so it is not reported as
-untracked. Symbolic links are never followed, and the scan does not descend
-into repositories.
+`.git` (inside the repository's folder, for a bare repository), and list
+`.ignore` in your global gitignore so it is not reported as untracked.
+Symbolic links are never followed, and the scan does not descend into
+repositories.
 
 A repository's linked worktrees come from its own records, not from the scan,
 so they are listed under it wherever they are on disk: the exclude list,
@@ -178,6 +184,7 @@ Ignore rules follow git's: `core.excludesFile` (default
 | `-t` has no visible effect | `-t` off prints full paths |
 | Stash check reads the loose `refs/stash` file only | Packed refs are found too |
 | A linked worktree is listed only where the scan finds it, as a repository | Every linked worktree is listed under its repository, marked 🌳 |
+| A bare repository's folder is walked into, and its worktrees are listed on their own | A bare repository is listed with 🪵, its worktrees under it |
 
 ## Known limitations
 
@@ -196,8 +203,17 @@ Ignore rules follow git's: `core.excludesFile` (default
 - Per-worktree config (`extensions.worktreeConfig`, `config.worktree`) is not
   read, and a repository with `extensions.relativeWorktrees` is refused as an
   unknown extension.
-- Bare repositories under the scan root are not detected; their linked
-  worktrees inside the root are listed on their own.
+- `core.worktree` is not read: a git directory that names its working tree
+  with it is listed as bare (🪵), where git would use that working tree.
+- A git directory made with `--separate-git-dir` (`git init` or `git clone`)
+  is listed as bare (🪵) when the scan reaches it, and its working tree is
+  listed on its own: the git directory does not record where its working
+  tree is, so the two cannot be joined.
+- `safe.bareRepository` is not read. git uses it to refuse bare repositories
+  found inside other folders, because git runs configuration and hooks from a
+  repository; git-dirty runs nothing, and lists every bare repository it finds.
+- 🪵 (U+1FAB5) is a Unicode 13 emoji. A terminal whose emoji font predates it
+  prints a box in its place.
 
 ## Development
 

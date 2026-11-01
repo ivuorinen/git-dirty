@@ -246,3 +246,21 @@ func FuzzLinkFile(f *testing.F) {
 		}
 	})
 }
+
+// FuzzValidHeadRef: an accepted HEAD is a symbolic ref or starts with an
+// object ID, as git's validate_headref requires.
+func FuzzValidHeadRef(f *testing.F) {
+	for _, s := range []string{
+		"ref: refs/heads/main\n", strings.Repeat("a", 40), strings.Repeat("b", 64), "ref: HEAD\n", "garbage",
+	} {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if !validHeadRef(data) || strings.HasPrefix(string(data), "ref:") {
+			return
+		}
+		if len(data) < 40 || strings.Trim(string(data[:40]), "0123456789abcdefABCDEF") != "" {
+			t.Fatalf("validHeadRef(%q) = true without a ref: or a 40-digit object ID", data)
+		}
+	})
+}

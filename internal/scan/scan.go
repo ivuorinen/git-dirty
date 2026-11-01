@@ -1,5 +1,5 @@
-// Package scan walks a directory tree for git working trees and inspects each
-// one concurrently.
+// Package scan walks a directory tree for git repositories, working trees and
+// bare repositories, and inspects each one concurrently.
 package scan
 
 import (
@@ -29,8 +29,8 @@ type Kind int
 
 // Item kinds.
 const (
-	Dir     Kind = iota // a directory that is not a working tree
-	Repo                // an inspected working tree; Result is set
+	Dir     Kind = iota // a directory that is not a repository
+	Repo                // an inspected repository; Result is set
 	Warning             // a directory that was skipped; Message says why
 )
 
@@ -43,6 +43,8 @@ type Item struct {
 	Result   gitstat.Result
 	Message  string
 	Worktree bool // a linked worktree listed under its repository; Rel ends in its ID
+
+	listErr error // why the repository's worktrees could not be listed
 }
 
 // Run scans in the background and returns the event stream, closed when the
@@ -66,6 +68,11 @@ func Run(ctx context.Context, opts Options) <-chan Item {
 			for j := range jobs {
 				j.Kind = Repo
 				j.Result = gitstat.Inspect(ctx, j.Path, opts.Inspect)
+				// A bare repository's line counts its worktrees; when they
+				// could not be listed, it shows why instead of a count.
+				if j.listErr != nil && j.Result.Bare && j.Result.Err == nil {
+					j.Result.Err = fmt.Errorf("worktrees: %w", j.listErr)
+				}
 				send(ctx, out, j)
 			}
 		}()
@@ -109,14 +116,15 @@ type discoverer struct {
 }
 
 // walk mirrors the bash script: a directory containing a .git entry is a
-// working tree and is not descended into; otherwise its subdirectories are
-// visited in name order, skipping symlinks, excluded names and directories
-// holding an .ignore file.
+// repository and is not descended into, and so is a directory that is itself
+// a git directory (a bare repository), which the script would enter;
+// otherwise its subdirectories are visited in name order, skipping symlinks,
+// excluded names and directories holding an .ignore file.
 func (d *discoverer) walk(dir string, rel []string) bool {
 	if d.ctx.Err() != nil {
 		return false
 	}
-	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil || gitrepo.IsGitDir(dir) {
 		return d.repo(dir, rel)
 	}
 	if !send(d.ctx, d.out, Item{Kind: Dir, Path: dir, Rel: rel}) {
@@ -160,7 +168,7 @@ func (d *discoverer) repo(dir string, rel []string) bool {
 
 		return true
 	}
-	if !send(d.ctx, d.jobs, Item{Path: dir, Rel: rel}) {
+	if !send(d.ctx, d.jobs, Item{Path: dir, Rel: rel, listErr: err}) {
 		return false
 	}
 	if err != nil {

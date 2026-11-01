@@ -19,12 +19,13 @@ type Worktree struct {
 	Err  error  // why it cannot be inspected; Path may then be ""
 }
 
-// ListWorktrees lists the linked worktrees of the working tree at path, in
-// ID order. linked is true, with none listed, when path is itself a linked
-// worktree (its git dir has a commondir file). A worktree that cannot be
-// inspected is listed with Err set; errors name no path.
+// ListWorktrees lists the linked worktrees of the repository at path, a
+// working tree or a folder that is itself a git directory, in ID order.
+// linked is true, with none listed, when path is itself a linked worktree
+// (its git dir has a commondir file). A worktree that cannot be inspected is
+// listed with Err set; errors name no path.
 func ListWorktrees(path string) (wts []Worktree, linked bool, err error) {
-	gitDir, err := findGitDir(path)
+	gitDir, _, err := resolveGitDir(path)
 	if err != nil {
 		return nil, false, err
 	}

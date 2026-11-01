@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -48,5 +49,85 @@ func TestOpenRegular(t *testing.T) {
 				t.Fatalf("OpenRegular(%s) blocked", c.path)
 			}
 		})
+	}
+}
+
+// TestOpen_BoundedReads: IsGitDir lets the walk open folders a clone or an
+// archive checked out (git never checks out a .git path, but it does check
+// out HEAD, objects/, refs/ and a symlinked config), so config and
+// commondir must refuse a device and a file over the size cap at once.
+func TestOpen_BoundedReads(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		make func(t *testing.T, p string)
+		file string
+	}{
+		{"config links to /dev/zero", linkDevZero, configName},
+		{"commondir links to /dev/zero", linkDevZero, "commondir"},
+		{"config over the size cap", func(t *testing.T, p string) {
+			t.Helper()
+			body := "[core]\n\tbare = true\n" + strings.Repeat("# padding\n", maxConfigFile/10+1)
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, configName},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := bareRepo(t, SHA1)
+			p := filepath.Join(dir, c.file)
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			c.make(t, p)
+			done := make(chan error, 1)
+			go func() {
+				r, err := Open(dir)
+				if err == nil {
+					_ = r.Close()
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Errorf("Open succeeded with %s", c.name)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("Open did not return with %s", c.name)
+			}
+		})
+	}
+}
+
+// configName is a repository's config file.
+const configName = "config"
+
+func linkDevZero(t *testing.T, p string) {
+	t.Helper()
+	if err := os.Symlink("/dev/zero", p); err != nil {
+		t.Skip(err)
+	}
+}
+
+// TestIsGitDir_FIFOHead: a FIFO HEAD is refused without waiting for a
+// writer. There is no oracle: git's open() of the FIFO would block.
+func TestIsGitDir_FIFOHead(t *testing.T) {
+	dir := bareRepo(t, SHA1)
+	head := filepath.Join(dir, "HEAD")
+	if err := os.Remove(head); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(head, 0o600); err != nil {
+		t.Skip(err)
+	}
+	done := make(chan bool, 1)
+	go func() { done <- IsGitDir(dir) }()
+	select {
+	case got := <-done:
+		if got {
+			t.Error("IsGitDir with a FIFO HEAD = true, want false")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("IsGitDir blocked on a FIFO HEAD")
 	}
 }

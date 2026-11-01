@@ -22,6 +22,19 @@ type Node struct {
 	sorted   bool
 }
 
+// Worktrees returns how many linked worktrees are listed under n, whether or
+// not a filter shows them.
+func (n *Node) Worktrees() int {
+	count := 0
+	for _, c := range n.children {
+		if c.Worktree {
+			count++
+		}
+	}
+
+	return count
+}
+
 // Tree is built from scan items by a single goroutine; it is not safe for
 // concurrent use.
 type Tree struct {

@@ -150,3 +150,13 @@ func TestIgnore_NoSystemConfigRead(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestIgnore_GlobalConfigNullDevice: GIT_CONFIG_GLOBAL=/dev/null is git's
+// documented way to skip the global config; it must not stop the scan.
+func TestIgnore_GlobalConfigNullDevice(t *testing.T) {
+	isolatedHome(t)
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	if _, err := LoadExcludes(); err != nil {
+		t.Fatalf("GIT_CONFIG_GLOBAL=%s: %v", os.DevNull, err)
+	}
+}
