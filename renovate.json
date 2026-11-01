@@ -2,5 +2,28 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>ivuorinen/renovate-config"
+  ],
+  "packageRules": [
+    {
+      "description": [
+        "The Go toolchain and the indirect modules are compiled into the released binary, ",
+        "as the require modules are. config:recommended gives only require updates the ",
+        "'fix' type, which svu releases as a patch version; this rule gives the other two ",
+        "the same type, so a security fix in the Go standard library or in a transitive ",
+        "module is released too. The gomod manager extracts every '// indirect' module ",
+        "with enabled: false, so without 'enabled' here Renovate would open no indirect ",
+        "update for the type to apply to. It is set here and not in the shared preset ",
+        "because a library's toolchain line never reaches its users."
+      ],
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "toolchain",
+        "indirect"
+      ],
+      "enabled": true,
+      "semanticCommitType": "fix"
+    }
   ]
 }

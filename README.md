@@ -244,8 +244,14 @@ fetches `origin` first and stops if either is not true.
 messages since the last tag: `fix:` bumps the patch version, `feat:` the minor
 version, and a breaking change (`feat!:`, `fix!:` or a `BREAKING CHANGE:`
 footer) the minor version while the version is 0.x. When no commit since the
-last tag calls for a release, svu prints the current tag, and `git tag` stops
-the task because that tag already exists.
+last tag calls for a release, svu prints the current tag, and the task stops
+with "Nothing to release" before it tags anything.
+
+Renovate's commits follow the same rule. An update to a Go module or to the Go
+toolchain, both compiled into the binary, is a `fix(deps)` commit and releases
+a patch version. Updates to GitHub Actions and to development tools are
+`chore` commits and release nothing. Merging an update does not release it;
+`mise run release` does.
 
 The release notes list the commits by type, under Features, Bug fixes,
 Refactoring, Build, CI and Chores; commits of any other type, and merge
