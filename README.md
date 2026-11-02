@@ -205,9 +205,10 @@ Ignore rules follow git's: `core.excludesFile` (default
 - The commit-graph file is not used: ahead/behind is computed from commit
   objects. The counts are the same; only very long divergences take longer.
 - `[include]` and `[includeIf]` in git config files are not followed.
-- Per-worktree config (`extensions.worktreeConfig`, `config.worktree`) is not
-  read, and a repository with `extensions.relativeWorktrees` is refused as an
-  unknown extension.
+- Per-worktree config (`extensions.worktreeConfig`, `config.worktree`) is read
+  for `core.bare` only, which decides whether a repository is listed as bare
+  (🪵); its other settings are not read. A repository with
+  `extensions.relativeWorktrees` is refused as an unknown extension.
 - `core.worktree` is not read: a git directory that names its working tree
   with it is listed as bare (🪵), where git would use that working tree.
 - A git directory made with `--separate-git-dir` (`git init` or `git clone`)
