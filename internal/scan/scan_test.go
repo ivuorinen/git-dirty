@@ -414,6 +414,80 @@ func TestRun_BareWorktreesUnreadable(t *testing.T) {
 	}
 }
 
+// brokenWorktreesFixture makes a repository, main, with two linked worktrees
+// whose .git files name a missing directory: a-before, which the walk reaches
+// before main, and z-after, which it reaches after. orphan has the same .git
+// file and no repository lists it.
+func brokenWorktreesFixture(t *testing.T) (base string) {
+	t.Helper()
+	base = t.TempDir()
+	mkrepo(t, base, "main")
+	repo := filepath.Join(base, "main")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "init")
+	for _, name := range []string{"a-before", "z-after"} {
+		gitIn(t, repo, "worktree", "add", "-q", "--detach", filepath.Join(base, name))
+	}
+	mkdir(t, base, "orphan")
+	broken := []byte("gitdir: " + filepath.Join(base, "nowhere") + "\n")
+	for _, name := range []string{"a-before", "z-after", "orphan"} {
+		if err := os.WriteFile(filepath.Join(base, name, ".git"), broken, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return base
+}
+
+// TestRun_BrokenWorktreeListedOnce: main still lists both broken worktrees,
+// with an error, and the walk must not list their folders again, whether it
+// reaches them before main or after it. orphan is still listed on its own.
+func TestRun_BrokenWorktreeListedOnce(t *testing.T) {
+	checkErrs(t, repoItems(t, baseOpts(brokenWorktreesFixture(t))), map[string]string{
+		"main":          "",
+		"main/a-before": "worktree: invalid .git file: not a git repository",
+		"main/z-after":  "worktree: invalid .git file: not a git repository",
+		"orphan":        "not a git repository",
+	})
+}
+
+// TestRun_BrokenWorktreeWarnings: the "cannot list worktrees" warning is sent
+// for orphan alone. A folder that main lists is shown under main with its
+// error, and its own listing failure is not reported again.
+func TestRun_BrokenWorktreeWarnings(t *testing.T) {
+	var warned []string
+	for it := range Run(context.Background(), baseOpts(brokenWorktreesFixture(t))) {
+		if it.Kind == Warning {
+			warned = append(warned, strings.Join(it.Rel, "/")+": "+it.Message)
+		}
+	}
+	if len(warned) != 1 || !strings.HasPrefix(warned[0], "orphan: cannot list worktrees: ") {
+		t.Errorf("warnings %q, want one for orphan", warned)
+	}
+}
+
+// checkErrs checks that got has an item at each rel in want and nowhere
+// else, and that each item's error contains want[rel], or that it has none
+// when want[rel] is "".
+func checkErrs(t *testing.T, got map[string]Item, want map[string]string) {
+	t.Helper()
+	for rel, it := range got {
+		w, ok := want[rel]
+		switch {
+		case !ok:
+			t.Errorf("unexpected item at %q: %v", rel, it.Result.Err)
+		case w == "" && it.Result.Err != nil:
+			t.Errorf("%q: %v", rel, it.Result.Err)
+		case w != "" && (it.Result.Err == nil || !strings.Contains(it.Result.Err.Error(), w)):
+			t.Errorf("%q: Err = %v, want %q", rel, it.Result.Err, w)
+		}
+	}
+	for rel := range want {
+		if _, ok := got[rel]; !ok {
+			t.Errorf("no item at %q", rel)
+		}
+	}
+}
+
 func TestRun_CancelClosesPromptly(t *testing.T) {
 	root := t.TempDir()
 	for i := range 40 {

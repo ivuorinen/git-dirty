@@ -65,8 +65,10 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   `gitrepo.IsGitDir` (a bare repository), is a repository and is not entered;
   `gitstat.Inspect` stops at the open stage for a bare one (`Result.Bare`).
   A repository's linked worktrees are queued as its
-  children (`Item.Worktree`). A linked worktree the walk finds is held until
-  the walk ends and sent only if no repository listed it, compared with
+  children (`Item.Worktree`), and each is claimed, even one listed with an
+  error. A linked worktree the walk finds, or a folder whose worktrees cannot
+  be listed (a worktree with a broken `.git` file is one), is held until the
+  walk ends and sent only if no repository claimed it, compared with
   `os.SameFile` because git records paths with symlinks resolved.
 - **internal/tree/**: builds the display tree and applies the verbose, depth and
   dirty-only filters. `Node.Problem` (a dirty or unreadable repository or

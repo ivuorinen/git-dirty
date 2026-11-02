@@ -83,7 +83,7 @@ func Run(ctx context.Context, opts Options) <-chan Item {
 		defer close(jobs)
 		d := discoverer{ctx: ctx, opts: opts, out: out, jobs: jobs}
 		if d.walk(opts.Root, nil) {
-			d.sendLinked()
+			d.sendHeld()
 		}
 	}()
 	go func() {
@@ -112,7 +112,7 @@ type discoverer struct {
 	jobs chan<- Item
 
 	claimed []os.FileInfo // directories of the worktrees repositories listed
-	linked  []Item        // linked worktrees the walk found, held until it ends
+	held    []Item        // folders the walk found that a repository may list; see repo
 }
 
 // walk mirrors the bash script: a directory containing a .git entry is a
@@ -159,20 +159,20 @@ func (d *discoverer) visit(dir string, rel []string, name string) bool {
 }
 
 // repo queues the working tree at dir, then the linked worktrees it records
-// as its children. A linked worktree found by the walk is held instead: the
-// repository that lists it may come later in the walk.
+// as its children. Two kinds of folder are held until the walk ends instead,
+// because the repository that lists one as its worktree may come later in the
+// walk: a linked worktree, and a folder whose worktrees cannot be listed. A
+// worktree whose .git file is broken is one of the latter, and its repository
+// still lists it, with the error.
 func (d *discoverer) repo(dir string, rel []string) bool {
 	wts, linked, err := gitrepo.ListWorktrees(dir)
-	if linked {
-		d.linked = append(d.linked, Item{Path: dir, Rel: rel})
+	if linked || err != nil {
+		d.held = append(d.held, Item{Path: dir, Rel: rel, listErr: err})
 
 		return true
 	}
-	if !send(d.ctx, d.jobs, Item{Path: dir, Rel: rel, listErr: err}) {
+	if !send(d.ctx, d.jobs, Item{Path: dir, Rel: rel}) {
 		return false
-	}
-	if err != nil {
-		return d.warn(dir, rel, fmt.Sprintf("cannot list worktrees: %v", err))
 	}
 	for _, wt := range wts {
 		if !d.worktree(rel, wt) {
@@ -184,8 +184,12 @@ func (d *discoverer) repo(dir string, rel []string) bool {
 }
 
 // worktree queues one listed worktree, or reports it uninspected when it
-// cannot be inspected.
+// cannot be inspected. Either way its folder is claimed: it is listed here,
+// with its error if it has one, and the walk must not list it again.
 func (d *discoverer) worktree(rel []string, wt gitrepo.Worktree) bool {
+	if fi, err := os.Stat(wt.Path); err == nil {
+		d.claimed = append(d.claimed, fi)
+	}
 	it := Item{Path: wt.Path, Rel: slices.Concat(rel, []string{wt.ID}), Worktree: true}
 	if wt.Err != nil {
 		it.Kind = Repo
@@ -193,21 +197,22 @@ func (d *discoverer) worktree(rel []string, wt gitrepo.Worktree) bool {
 
 		return send(d.ctx, d.out, it)
 	}
-	if fi, err := os.Stat(wt.Path); err == nil {
-		d.claimed = append(d.claimed, fi)
-	}
 
 	return send(d.ctx, d.jobs, it)
 }
 
-// sendLinked queues each held linked worktree that no repository in the scan
-// listed, at its own place in the walk.
-func (d *discoverer) sendLinked() {
-	for _, it := range d.linked {
+// sendHeld queues each held folder that no repository in the scan listed, at
+// its own place in the walk, with the warning for worktrees it could not
+// list.
+func (d *discoverer) sendHeld() {
+	for _, it := range d.held {
 		if d.isClaimed(it.Path) {
 			continue
 		}
 		if !send(d.ctx, d.jobs, it) {
+			return
+		}
+		if it.listErr != nil && !d.warn(it.Path, it.Rel, fmt.Sprintf("cannot list worktrees: %v", it.listErr)) {
 			return
 		}
 	}
