@@ -277,6 +277,14 @@ func dotGitElsewhere(t *testing.T, _, wt string) {
 	writeFile(t, wt, ".git", "gitdir: "+filepath.Join(other, ".git", "worktrees", "wt")+"\n")
 }
 
+// dotGitMissing points the worktree's .git file at a directory that does
+// not exist: git's "not a git repository", without the path, and not the
+// missing-worktree error.
+func dotGitMissing(t *testing.T, _, wt string) {
+	t.Helper()
+	writeFile(t, wt, ".git", "gitdir: "+filepath.Join(t.TempDir(), "nowhere")+"\n")
+}
+
 func TestListWorktrees_Hostile(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -288,6 +296,7 @@ func TestListWorktrees_Hostile(t *testing.T) {
 		{"gitdir links to /dev/zero", gitdirDevZero, "invalid gitdir file: not a regular file"},
 		{"gitdir names no .git file", gitdirNotDotGit, "invalid gitdir file: does not name a .git file"},
 		{"worktree .git leads to another repository", dotGitElsewhere, "worktree .git file names another git dir"},
+		{"worktree .git names a missing directory", dotGitMissing, "invalid .git file: not a git repository"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir, admin, wt := oneWorktree(t)

@@ -126,6 +126,19 @@ func (r *Repository) Close() error {
 	return r.odb.close()
 }
 
+// errNotGitRepo is git's wording (read_gitfile_gently) for a .git file that
+// names a directory that is not there.
+var errNotGitRepo = errors.New("not a git repository")
+
+// findGitDir returns the git dir of the working tree at worktree: its .git
+// directory, or the directory its .git file names. An error from a .git file
+// is "<.git path>: <cause>", and errors.Unwrap gives the cause without a path,
+// as readWorktree reports it. A missing .git is the fs.ErrNotExist from
+// Lstat, and only that: a .git file naming a missing directory fails with
+// errNotGitRepo, followed by the directory, as git does. It is not
+// fs.ErrNotExist, which readWorktree takes for a missing worktree. Without
+// the check, Open read the missing dir's commondir and config as absent, and
+// the first error was HEAD: reference not found.
 func findGitDir(worktree string) (string, error) {
 	p := filepath.Join(worktree, ".git")
 	fi, err := os.Lstat(p)
@@ -142,8 +155,12 @@ func findGitDir(worktree string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(worktree, dir)
 	}
+	dir = filepath.Clean(dir)
+	if !isDir(dir) {
+		return "", fmt.Errorf("%s: %w: %s", p, errNotGitRepo, dir)
+	}
 
-	return filepath.Clean(dir), nil
+	return dir, nil
 }
 
 // resolveGitDir returns the git dir of the working tree at path, or path

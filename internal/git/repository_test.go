@@ -302,3 +302,37 @@ func TestIsGitDir_WorktreeAdminDir(t *testing.T) {
 		t.Error("IsGitDir(admin dir) = true, want false: commondir is not followed")
 	}
 }
+
+// A .git file naming a git directory that does not exist is git's "not a
+// git repository" error. Open would otherwise read the missing commondir and
+// config as absent, and the first failure would be HEAD, misnaming the cause.
+// Cases: a worktree moved after `git worktree prune` deleted its admin dir,
+// and a .git file naming a path that never existed.
+func TestOpenWorktree_MissingGitDir(t *testing.T) {
+	dir := worktreeRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	addWorktree(t, dir, wt)
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(wt, moved); err != nil {
+		t.Fatal(err)
+	}
+	run(t, dir, "worktree", "prune")
+	never := t.TempDir()
+	writeFile(t, never, ".git", "gitdir: "+filepath.Join(never, "nowhere")+"\n")
+
+	for _, path := range []string{moved, never} {
+		target, err := readLinkFile(filepath.Join(path, ".git"), "gitdir:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(path))
+		out, code := runCode(t, path, nil, "rev-parse", "--git-dir")
+		if code == 0 || !strings.Contains(out, "not a git repository: "+target) {
+			t.Fatalf("git rev-parse: exit %d, %q; want not a git repository: %s", code, out, target)
+		}
+		want := "not a git repository: " + filepath.Clean(target)
+		if _, err := OpenWorktree(path); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("OpenWorktree(%s): %v; want %q", filepath.Base(path), err, want)
+		}
+	}
+}
