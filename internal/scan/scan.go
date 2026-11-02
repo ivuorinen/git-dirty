@@ -4,6 +4,7 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -185,10 +186,15 @@ func (d *discoverer) repo(dir string, rel []string) bool {
 
 // worktree queues one listed worktree, or reports it uninspected when it
 // cannot be inspected. Either way its folder is claimed: it is listed here,
-// with its error if it has one, and the walk must not list it again.
+// with its error if it has one, and the walk must not list it again. The one
+// exception is a folder whose .git file leads to another repository
+// (gitrepo.ErrOtherGitDir): it is that repository's worktree, so it stays
+// unclaimed, and the walk lists it when that repository is outside the scan.
 func (d *discoverer) worktree(rel []string, wt gitrepo.Worktree) bool {
-	if fi, err := os.Stat(wt.Path); err == nil {
-		d.claimed = append(d.claimed, fi)
+	if !errors.Is(wt.Err, gitrepo.ErrOtherGitDir) {
+		if fi, err := os.Stat(wt.Path); err == nil {
+			d.claimed = append(d.claimed, fi)
+		}
 	}
 	it := Item{Path: wt.Path, Rel: slices.Concat(rel, []string{wt.ID}), Worktree: true}
 	if wt.Err != nil {

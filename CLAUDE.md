@@ -65,12 +65,14 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   selects on `ctx.Done()`. A folder holding `.git`, or passing
   `gitrepo.IsGitDir` (a bare repository), is a repository and is not entered;
   `gitstat.Inspect` stops at the open stage for a bare one (`Result.Bare`).
-  A repository's linked worktrees are queued as its
-  children (`Item.Worktree`), and each is claimed, even one listed with an
-  error. A linked worktree the walk finds, or a folder whose worktrees cannot
-  be listed (a worktree with a broken `.git` file is one), is held until the
-  walk ends and sent only if no repository claimed it, compared with
-  `os.SameFile` because git records paths with symlinks resolved.
+  A repository's linked worktrees are queued as its children
+  (`Item.Worktree`), and each is claimed, even one listed with an error,
+  except one whose `.git` file leads to another repository
+  (`gitrepo.ErrOtherGitDir`). A linked worktree the walk finds, or a folder
+  whose worktrees cannot be listed (a worktree with a broken `.git` file is
+  one), is held until the walk ends and sent only if no repository claimed it,
+  compared with `os.SameFile` because git records paths with symlinks
+  resolved.
 - **internal/tree/**: builds the display tree and applies the verbose, depth and
   dirty-only filters. `Node.Problem` (a dirty or unreadable repository or
   worktree below) is the dirty-only rule and also picks a directory's icon:

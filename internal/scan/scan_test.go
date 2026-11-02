@@ -465,6 +465,33 @@ func TestRun_BrokenWorktreeWarnings(t *testing.T) {
 	}
 }
 
+// TestRun_OtherRepositorysWorktree: a's record for w is stale, because w was
+// deleted without `git worktree prune` and is now a worktree of b, which is
+// outside the scan. a lists w with the back-link error but must not claim it,
+// so the walk still lists w on its own, as the valid worktree it is.
+func TestRun_OtherRepositorysWorktree(t *testing.T) {
+	base := t.TempDir()
+	mkrepo(t, base, "a")
+	repo := filepath.Join(base, "a")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "init")
+	w := filepath.Join(base, "w")
+	gitIn(t, repo, "worktree", "add", "-q", "--detach", w)
+	if err := os.RemoveAll(w); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	mkrepo(t, other, "b")
+	b := filepath.Join(other, "b")
+	gitIn(t, b, "commit", "-q", "--allow-empty", "-m", "init")
+	gitIn(t, b, "worktree", "add", "-q", "--detach", w)
+
+	checkErrs(t, repoItems(t, baseOpts(base)), map[string]string{
+		"a":   "",
+		"a/w": "worktree: worktree .git file names another git dir",
+		"w":   "",
+	})
+}
+
 // checkErrs checks that got has an item at each rel in want and nowhere
 // else, and that each item's error contains want[rel], or that it has none
 // when want[rel] is "".
