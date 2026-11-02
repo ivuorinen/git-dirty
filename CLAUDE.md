@@ -115,7 +115,11 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   Object reads are checked by
   re-hashing the content. Add a fixture there instead of a hand-written
   expected value. gitstat tables run in SHA-1 and SHA-256 repositories through
-  `forEachFormat`.
+  `forEachFormat`. Tests must pass with an older and a newer git: CI runs the
+  newest release, a local install is often older, and git rewords its
+  messages (2.56 reworded the error for a `.git` file naming a missing
+  directory), so compare exit codes and output, not an error's wording, or
+  accept each release's wording.
 - **Ahead/behind needs the late-bit recount.** Commits with equal timestamps,
   or clock skew, can deliver a tip's bit after a commit was counted;
   `walkState.add` uncounts and re-queues it. Mutating it away fails

@@ -303,11 +303,24 @@ func TestIsGitDir_WorktreeAdminDir(t *testing.T) {
 	}
 }
 
+// gitNotARepo reports whether out is git's error for a .git file at path that
+// names target, a directory that is not a git directory. git up to 2.55 says
+// "not a git repository: <target>"; 2.56 reworded it to "gitfile does not
+// point to a valid repository: <path>/.git", with path as git resolved it
+// (symlinks and Windows short names expanded), so only its last element is
+// compared.
+func gitNotARepo(out, path, target string) bool {
+	return strings.Contains(out, "not a git repository: "+target) ||
+		(strings.Contains(out, "gitfile does not point to a valid repository: ") &&
+			strings.Contains(out, filepath.Base(path)+"/.git"))
+}
+
 // A .git file naming a git directory that does not exist is git's "not a
-// git repository" error. Open would otherwise read the missing commondir and
-// config as absent, and the first failure would be HEAD, misnaming the cause.
-// Cases: a worktree moved after `git worktree prune` deleted its admin dir,
-// and a .git file naming a path that never existed.
+// git repository" error, whichever wording the installed git uses. Open would
+// otherwise read the missing commondir and config as absent, and the first
+// failure would be HEAD, misnaming the cause. Cases: a worktree moved after
+// `git worktree prune` deleted its admin dir, and a .git file naming a path
+// that never existed.
 func TestOpenWorktree_MissingGitDir(t *testing.T) {
 	dir := worktreeRepo(t)
 	wt := filepath.Join(t.TempDir(), "wt")
@@ -327,8 +340,8 @@ func TestOpenWorktree_MissingGitDir(t *testing.T) {
 		}
 		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(path))
 		out, code := runCode(t, path, nil, "rev-parse", "--git-dir")
-		if code == 0 || !strings.Contains(out, "not a git repository: "+target) {
-			t.Fatalf("git rev-parse: exit %d, %q; want not a git repository: %s", code, out, target)
+		if code == 0 || !gitNotARepo(out, path, target) {
+			t.Fatalf("git rev-parse: exit %d, %q; want git's error for a .git file naming %s", code, out, target)
 		}
 		want := "not a git repository: " + filepath.Clean(target)
 		if _, err := OpenWorktree(path); err == nil || !strings.Contains(err.Error(), want) {

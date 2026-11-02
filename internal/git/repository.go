@@ -126,8 +126,10 @@ func (r *Repository) Close() error {
 	return r.odb.close()
 }
 
-// errNotGitRepo is git's wording (read_gitfile_gently) for a .git file that
-// names a directory that is not there.
+// errNotGitRepo is git's wording up to 2.55 (read_gitfile_gently) for a .git
+// file that names a directory that is not there. git 2.56 reworded it to
+// "gitfile does not point to a valid repository" and names the .git file;
+// the error findGitDir returns names both.
 var errNotGitRepo = errors.New("not a git repository")
 
 // findGitDir returns the git dir of the working tree at worktree: its .git
@@ -135,7 +137,7 @@ var errNotGitRepo = errors.New("not a git repository")
 // is "<.git path>: <cause>", and errors.Unwrap gives the cause without a path,
 // as readWorktree reports it. A missing .git is the fs.ErrNotExist from
 // Lstat, and only that: a .git file naming a missing directory fails with
-// errNotGitRepo, followed by the directory, as git does. It is not
+// errNotGitRepo, followed by the directory, as git up to 2.55 does. It is not
 // fs.ErrNotExist, which readWorktree takes for a missing worktree. Without
 // the check, Open read the missing dir's commondir and config as absent, and
 // the first error was HEAD: reference not found.
