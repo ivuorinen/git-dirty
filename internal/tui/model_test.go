@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	gitrepo "github.com/ivuorinen/git-dirty/internal/git"
 	"github.com/ivuorinen/git-dirty/internal/gitstat"
@@ -81,6 +82,34 @@ func results() []scan.Item {
 				Status: gitstat.Status{Modified: true},
 			},
 		),
+	}
+}
+
+// viewResults adds a bare repository with one worktree to results(), for
+// the view's golden file. results() itself keeps its three items: the
+// counting tests and TestWaitBatch's four-slot channel depend on them.
+func viewResults() []scan.Item {
+	h, _ := gitrepo.SHA1.ParseHex("1111111111111111111111111111111111111111")
+	wt := filepath.Join(root, "bare-wt")
+
+	return append(results(),
+		repo("bare.git", gitstat.Result{Bare: true}),
+		scan.Item{
+			Kind:     scan.Repo,
+			Path:     wt,
+			Rel:      []string{"bare.git", "wt"},
+			Worktree: true,
+			Result:   gitstat.Result{Path: wt, Head: gitstat.Head{Branch: mainBranch, Label: mainBranch, Hash: h}},
+		},
+	)
+}
+
+// TestIconBareWidth: the TUI lays rows out by lipgloss's width, so 🪵 must
+// measure two columns, as the other icons do. The golden file cannot show
+// it: its rows are stored with the padding trimmed.
+func TestIconBareWidth(t *testing.T) {
+	if got, want := lipgloss.Width(render.IconBare), lipgloss.Width(render.IconWorktree); got != want || want != 2 {
+		t.Errorf("IconBare is %d columns, IconWorktree %d; want both 2", got, want)
 	}
 }
 
@@ -221,7 +250,7 @@ func TestStop_DrainsTheScan(t *testing.T) {
 func TestView_Golden(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m.Update(batchMsg{gen: m.gen, items: results(), done: true})
+	m.Update(batchMsg{gen: m.gen, items: viewResults(), done: true})
 	v := m.View()
 	if !v.AltScreen {
 		t.Error("view does not use the alternate screen")

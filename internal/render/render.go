@@ -24,19 +24,23 @@ const (
 	Plain  Style = iota // unstyled text
 	Clean               // ✅ icon
 	Dirty               // ❌ icon
-	NotGit              // ⚠️ icon for directories and errors
+	NotGit              // ⚠️ icon for errors and directories with a problem below
 	Status              // [MS?$]
 	Branch              // branch names and ahead/behind counts
 	Error               // error text
 )
 
 // Icons. The first three are the bash script's; IconWorktree marks a linked
-// worktree, ahead of its state icon.
+// worktree, ahead of its state icon; IconBare marks a bare repository, which
+// has no state icon, being without a working tree; IconFolder marks a
+// directory with no problem below it, where the script prints IconNotGit.
 const (
 	IconClean    = "✅"
 	IconDirty    = "❌"
 	IconNotGit   = "⚠️"
 	IconWorktree = "🌳"
+	IconBare     = "🪵"
+	IconFolder   = "📁"
 )
 
 // Segment is a run of text with one style.
@@ -63,9 +67,22 @@ func Line(l tree.Line, o Options) []Segment {
 	name = Sanitize(name)
 
 	if n.Repo == nil {
-		return append(segs, Segment{IconNotGit, NotGit}, Segment{Text: " " + name})
+		icon := Segment{Text: IconFolder}
+		if n.Problem() {
+			icon = Segment{IconNotGit, NotGit}
+		}
+
+		return append(segs, icon, Segment{Text: " " + name})
 	}
 	r := n.Repo
+	if r.Bare {
+		segs = append(segs, Segment{Text: IconBare + " " + name})
+		if r.Err != nil { // the worktrees could not be listed: no count to show
+			return append(segs, errorSegments(r.Err)...)
+		}
+
+		return append(segs, Segment{Text: " (" + worktreeCount(n.Worktrees()) + ")"})
+	}
 	if n.Worktree {
 		segs = append(segs, Segment{Text: IconWorktree + " "})
 	}
@@ -78,11 +95,26 @@ func Line(l tree.Line, o Options) []Segment {
 	}
 	segs = append(segs, defaultSegments(r.Default)...)
 	if r.Err != nil {
-		msg, _, _ := strings.Cut(r.Err.Error(), "\n")
-		segs = append(segs, Segment{Text: " "}, Segment{"! " + Sanitize(msg), Error})
+		segs = append(segs, errorSegments(r.Err)...)
 	}
 
 	return segs
+}
+
+// errorSegments is an error's first line, sanitized, after "! ".
+func errorSegments(err error) []Segment {
+	msg, _, _ := strings.Cut(err.Error(), "\n")
+
+	return []Segment{{Text: " "}, {"! " + Sanitize(msg), Error}}
+}
+
+// worktreeCount is a bare repository's "N worktrees", or "1 worktree".
+func worktreeCount(n int) string {
+	if n == 1 {
+		return "1 worktree"
+	}
+
+	return fmt.Sprintf("%d worktrees", n)
 }
 
 // stateIcon is the repository's icon: an error, dirty or clean.
@@ -249,8 +281,8 @@ func WriteSegments(w io.Writer, segs []Segment, color bool) error {
 func Header(root string, o Options) []string {
 	lines := []string{
 		"Checking repositories in: " + Sanitize(root),
-		"Legend: " + IconClean + " Clean repo | " + IconDirty + " Dirty repo | " + IconWorktree + " Worktree | " +
-			IconNotGit + " Directory / error",
+		"Legend: " + IconClean + " Clean repo | " + IconDirty + " Dirty repo | " + IconBare + " Bare repo | " +
+			IconWorktree + " Worktree | " + IconFolder + " Folder | " + IconNotGit + " Problem below / error",
 	}
 	if o.ShowBranch {
 		lines = append(lines, "Showing non-standard branches (hiding "+strings.Join(o.MainBranches, " ")+")")

@@ -1,9 +1,11 @@
 Checking repositories in: /home/u/Code
-Legend: ✅ Clean repo | ❌ Dirty repo | 🌳 Worktree | ⚠️ Directory / error
+Legend: ✅ Clean repo | ❌ Dirty repo | 🪵 Bare repo | 🌳 Worktree | 📁 Folder | ⚠️ Problem below / error
 Showing non-standard branches (hiding main master trunk)
 ---------------------------------------------------------
 ⚠️ /home/u/Code
 ├── ✅ /home/u/Code/a\x1b[2Jb
+├── 📁 /home/u/Code/clean-group
+│   └── ✅ /home/u/Code/clean-group/ok ↓3
 ├── ✅ /home/u/Code/fresh
 ├── ❌ /home/u/Code/gone [S$] (feat, upstream gone)
 ├── ⚠️ /home/u/Code/ivuorinen
@@ -11,10 +13,17 @@ Showing non-standard branches (hiding main master trunk)
 │   ├── ✅ /home/u/Code/ivuorinen/dotfiles ↓3
 │   │   └── 🌳 ❌ /home/u/worktrees/hotfix [M] (hotfix ↑1)
 │   ├── ❌ /home/u/Code/ivuorinen/gh-history ↑1
-│   └── ❌ /home/u/Code/ivuorinen/git-dirty [M?] (feature/tree ↑2) · main ↓4 · vs main ↑5 ↓1
-│       ├── 🌳 ✅ /home/u/worktrees/feat (feat, no upstream)
-│       └── 🌳 ⚠️ /home/u/worktrees/old ! worktree: gitdir file points to non-existent location
+│   ├── ❌ /home/u/Code/ivuorinen/git-dirty [M?] (feature/tree ↑2) · main ↓4 · vs main ↑5 ↓1
+│   │   ├── 🌳 ✅ /home/u/worktrees/feat (feat, no upstream)
+│   │   └── 🌳 ⚠️ /home/u/worktrees/old ! worktree: gitdir file points to non-existent location
+│   ├── 🪵 /home/u/Code/ivuorinen/locked.git ! worktrees: open worktrees: permission denied
+│   └── 🪵 /home/u/Code/ivuorinen/plain.git (2 worktrees)
+│       ├── 🌳 ❌ /home/u/worktrees/plain-feat [M] (feat, no upstream)
+│       └── 🌳 ✅ /home/u/worktrees/plain-main
+├── 🪵 /home/u/Code/lonely.git (0 worktrees)
 ├── ✅ /home/u/Code/scratch (wip, no upstream) · vs main ↑0 ↓0
+├── 🪵 /home/u/Code/single.git (1 worktree)
+│   └── 🌳 ✅ /home/u/worktrees/wt
 └── ✅ /home/u/Code/tagged (v1.0)
 
-Found 9 git repositories in 0.21s
+Found 14 git repositories in 0.21s

@@ -467,6 +467,8 @@ func writeHelp(w io.Writer, cfg config.Config) {
 		"  $ = Stashed changes (with -a)\n" +
 		"  ↑N ↓N = Commits ahead of / behind the upstream\n" +
 		"  🌳 = Linked worktree, listed under its repository\n" +
+		"  🪵 = Bare repository, with its worktrees listed under it\n" +
+		"  📁 = Folder; ⚠️ when a repository below it is dirty or unreadable\n" +
 		"\n" +
 		"Configuration: %[7]s\n" +
 		"and GIT_DIRTY_* environment variables; flags override both.\n" +

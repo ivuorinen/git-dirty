@@ -16,9 +16,17 @@
 # directory. A worktree the bash script does not reach (outside the
 # directory, or below an excluded one) is listed by git-dirty only: a + line.
 #
-# Only ✅ and ❌ lines are compared. ⚠️ lines are skipped on both sides, so a
+# Only ✅ and ❌ lines are compared. ⚠️ and 📁 lines (directories, and
+# repositories that could not be read) are skipped on both sides, so a
 # worktree git-dirty cannot read (its directory is gone, or its files are
 # invalid) gives no line: the bash script has no counterpart for it.
+#
+# A bare repository's line (🪵) has neither, so it is skipped too; its 🌳
+# worktrees are compared like any worktree. Where a bare repository sits
+# behind a .git entry (a .bare folder named by a .git file, or a bare .git),
+# the bash script runs git status in a folder with no working tree and prints
+# a false ❌ [MS]: a - line. It does not enter that folder either, so the
+# worktrees inside it are + lines.
 set -euo pipefail
 
 dir=${1:-$HOME/Code}

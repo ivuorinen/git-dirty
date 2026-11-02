@@ -176,6 +176,57 @@ func TestInspect_Errors(t *testing.T) {
 	})
 }
 
+// bareLayouts builds bare repositories in a fresh root, as the plan's
+// fixture layouts: plain.git with the worktree plain-main beside it, proj (a
+// bare .bare and a .git file naming it) with proj/main, dotgit (a bare .git)
+// with dotgit/main, and lonely.git.
+func bareLayouts(t *testing.T) string {
+	t.Helper()
+	seed := newRepo(t)
+	root := t.TempDir()
+	at := func(rel string) string { return filepath.Join(root, filepath.FromSlash(rel)) }
+	for _, rel := range []string{"plain.git", "proj/.bare", "dotgit/.git", "lonely.git"} {
+		git(t, root, "clone", "-q", "--bare", seed, at(rel))
+	}
+	git(t, at("plain.git"), "worktree", "add", "-q", "--detach", at("plain-main"))
+	write(t, root, "proj/.git", "gitdir: ./.bare\n")
+	git(t, at("proj"), "worktree", "add", "-q", "--detach", "main")
+	git(t, at("dotgit"), "worktree", "add", "-q", "--detach", "main")
+
+	return root
+}
+
+func TestInspect_Bare(t *testing.T) { forEachFormat(t, testInspectBare) }
+
+// testInspectBare: a bare repository is opened and nothing else is
+// inspected, so it has no status letters, where a working-tree inspection
+// would report the missing index as staged deletions. Its worktrees are
+// inspected as usual.
+func testInspectBare(t *testing.T) {
+	t.Helper()
+	root := bareLayouts(t)
+	for _, name := range []string{"plain.git", "proj", "dotgit", "lonely.git"} {
+		wantBareOnly(t, name, Inspect(context.Background(), filepath.Join(root, name), inspectOpts(t)))
+	}
+	wt := filepath.Join(root, "plain-main")
+	write(t, wt, "a.txt", "changed\n")
+	_, code := gitCode(t, wt, "diff", "--quiet")
+	res := Inspect(context.Background(), wt, inspectOpts(t))
+	if res.Bare || res.Err != nil || res.Status.Modified != (code == 1) {
+		t.Errorf("worktree of a bare repository: %+v; git diff --quiet exit %d", res, code)
+	}
+}
+
+// wantBareOnly checks that res is a bare result with nothing past the open
+// stage inspected.
+func wantBareOnly(t *testing.T, name string, res Result) {
+	t.Helper()
+	if !res.Bare || res.Err != nil || res.Dirty() || res.Status != (Status{}) ||
+		res.Head.Label != "" || res.Upstream != nil || res.Default != nil {
+		t.Errorf("%s: %+v, want a bare result and nothing inspected", name, res)
+	}
+}
+
 func TestInspect_ReleasesDescriptors(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("descriptor count via /proc/self/fd is Linux-only")

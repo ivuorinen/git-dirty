@@ -298,6 +298,122 @@ func TestRun_WorktreesSymlinkedRoot(t *testing.T) {
 	checkRepos(t, repoItems(t, baseOpts(link)), underRepo)
 }
 
+// The bare repositories bareFixture makes.
+const (
+	plainGit  = "plain.git"
+	projDir   = "proj"
+	dotgitDir = "dotgit"
+	lonelyGit = "lonely.git"
+)
+
+// bareFixture makes the plan's bare layouts in base: plain.git with the
+// worktrees plain-main (beside it), inside (in it) and away (outside base);
+// proj (a bare .bare and a .git file naming it) with proj/main; dotgit (a
+// bare .git) with dotgit/main; lonely.git; and ignored.git, holding .ignore.
+func bareFixture(t *testing.T) (base string) {
+	t.Helper()
+	seed := t.TempDir()
+	mkrepo(t, seed, ".")
+	gitIn(t, seed, "commit", "-q", "--allow-empty", "-m", "init")
+	base = t.TempDir()
+	at := func(rel string) string { return filepath.Join(base, filepath.FromSlash(rel)) }
+	for _, rel := range []string{plainGit, projDir + "/.bare", dotgitDir + "/.git", lonelyGit, "ignored.git"} {
+		gitIn(t, base, "clone", "-q", "--bare", seed, at(rel))
+	}
+	gitIn(t, at(plainGit), "worktree", "add", "-q", "--detach", at("plain-main"))
+	gitIn(t, at(plainGit), "worktree", "add", "-q", "--detach", "inside")
+	gitIn(t, at(plainGit), "worktree", "add", "-q", "--detach", filepath.Join(t.TempDir(), "away"))
+	for name, body := range map[string]string{projDir + "/.git": "gitdir: ./.bare\n", "ignored.git/.ignore": ""} {
+		if err := os.WriteFile(at(name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitIn(t, at(projDir), "worktree", "add", "-q", "--detach", "main")
+	gitIn(t, at(dotgitDir), "worktree", "add", "-q", "--detach", "main")
+
+	return base
+}
+
+// underBare is what a scan of bareFixture's base finds: each bare
+// repository with its worktrees under it, plain-main included although the
+// walk finds it too, and inside although the walk does not enter plain.git.
+var underBare = map[string]bool{
+	plainGit: false, plainGit + "/plain-main": true, plainGit + "/inside": true,
+	plainGit + "/away": true, projDir: false, projDir + "/main": true,
+	dotgitDir: false, dotgitDir + "/main": true, lonelyGit: false,
+}
+
+func TestRun_BareRepositories(t *testing.T) {
+	base := bareFixture(t)
+	for _, c := range []struct {
+		name    string
+		root    string
+		exclude string
+		want    map[string]bool
+	}{
+		{"base", base, "", underBare},
+		{"root is the bare repository", filepath.Join(base, plainGit), "", map[string]bool{
+			"": false, "plain-main": true, "inside": true, "away": true,
+		}},
+		{"bare repository excluded", base, plainGit, map[string]bool{
+			"plain-main": false, projDir: false, projDir + "/main": true,
+			dotgitDir: false, dotgitDir + "/main": true, lonelyGit: false,
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			opts := baseOpts(c.root)
+			if c.exclude != "" {
+				opts.Exclude = append(opts.Exclude, c.exclude)
+			}
+			checkRepos(t, repoItems(t, opts), c.want)
+		})
+	}
+}
+
+// TestRun_BareRepositoriesInspected: only the bare repositories are bare,
+// the walk does not enter one, and .ignore in one skips it.
+func TestRun_BareRepositoriesInspected(t *testing.T) {
+	base := bareFixture(t)
+	bare := []string{plainGit, projDir, dotgitDir, lonelyGit}
+	for rel, it := range repoItems(t, baseOpts(base)) {
+		if want := slices.Contains(bare, rel); it.Result.Bare != want {
+			t.Errorf("%q: Bare = %v, want %v", rel, it.Result.Bare, want)
+		}
+	}
+	c := collect(t, baseOpts(base))
+	for _, d := range c.dirs {
+		if strings.HasPrefix(d, plainGit+"/") {
+			t.Errorf("the walk entered the bare repository: %q", d)
+		}
+	}
+	if w := "ignored.git: skipped: contains .ignore"; !slices.Contains(c.warnings, w) {
+		t.Errorf("warnings %q, want %q", c.warnings, w)
+	}
+}
+
+// TestRun_BareWorktreesUnreadable: a bare repository whose worktrees/ cannot
+// be listed carries the error, so its line does not show a count of none.
+// A file in place of the directory fails the listing on every platform, as
+// an unreadable directory would.
+func TestRun_BareWorktreesUnreadable(t *testing.T) {
+	seed := t.TempDir()
+	mkrepo(t, seed, ".")
+	gitIn(t, seed, "commit", "-q", "--allow-empty", "-m", "init")
+	base := t.TempDir()
+	plain := filepath.Join(base, plainGit)
+	gitIn(t, base, "clone", "-q", "--bare", seed, plain)
+	if err := os.WriteFile(filepath.Join(plain, "worktrees"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	it, ok := repoItems(t, baseOpts(base))[plainGit]
+	switch {
+	case !ok:
+		t.Fatal("no item for the bare repository")
+	case !it.Result.Bare || it.Result.Err == nil || !strings.HasPrefix(it.Result.Err.Error(), "worktrees: "):
+		t.Errorf("Bare %v, Err %v; want bare with a worktrees: error", it.Result.Bare, it.Result.Err)
+	}
+}
+
 func TestRun_CancelClosesPromptly(t *testing.T) {
 	root := t.TempDir()
 	for i := range 40 {

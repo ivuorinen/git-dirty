@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -24,17 +24,36 @@ type configEntry struct {
 	noValue                  bool // "key" alone, which git reads as true
 }
 
-// ReadConfigFile parses the file at path; a missing file is an empty config.
+// maxConfigFile caps a config file that ReadConfigFile reads; a repository's
+// config comes from the repository, which may be hostile.
+const maxConfigFile = 16 << 20
+
+// ReadConfigFile parses the file at path; a missing file is an empty config,
+// and so is the null device, as git reads GIT_CONFIG_GLOBAL=/dev/null.
+// Otherwise only a regular file of at most maxConfigFile bytes is read: a
+// config may be a symlink (global configs often are), but one leading to a
+// device or a FIFO is refused by OpenRegular, so it cannot block or flood
+// the scan.
 func ReadConfigFile(path string) (*Config, error) {
+	if path == os.DevNull || path == "/dev/null" { // Git for Windows accepts /dev/null too
+		return &Config{}, nil
+	}
 	// Open passes the config under the repository's commondir, a path read
 	// from the repository; git reads the shared config there too.
-	//nolint:gosec // G703: following commondir to the shared config is git's own behavior
-	data, err := os.ReadFile(filepath.Clean(path))
+	f, err := OpenRegular(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return &Config{}, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	defer func() { _ = f.Close() }() // read-only
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigFile+1))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if len(data) > maxConfigFile {
+		return nil, fmt.Errorf("%s: larger than %d bytes", path, maxConfigFile)
 	}
 	c, err := ParseConfig(data)
 	if err != nil {

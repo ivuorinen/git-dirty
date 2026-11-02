@@ -1,12 +1,14 @@
 Checking repositories in: /home/u/Code
-Legend: ✅ Clean repo | ❌ Dirty repo | 🌳 Worktree | ⚠️ Directory / error
+Legend: ✅ Clean repo | ❌ Dirty repo | 🪵 Bare repo | 🌳 Worktree | 📁 Folder | ⚠️ Problem below / error
 Showing non-standard branches (hiding main master trunk)
 ---------------------------------------------------------
 ⚠️ /home/u/Code
 ├── ✅ a\x1b[2Jb
-├── ⚠️ deep
-│   └── ⚠️ a
-├── ⚠️ empty
+├── 📁 clean-group
+│   └── ✅ ok ↓3
+├── 📁 deep
+│   └── 📁 a
+├── 📁 empty
 ├── ✅ fresh
 ├── ❌ gone [S$] (feat, upstream gone)
 ├── ⚠️ ivuorinen
@@ -14,10 +16,17 @@ Showing non-standard branches (hiding main master trunk)
 │   ├── ✅ dotfiles ↓3
 │   │   └── 🌳 ❌ hotfix [M] (hotfix ↑1)
 │   ├── ❌ gh-history ↑1
-│   └── ❌ git-dirty [M?] (feature/tree ↑2) · main ↓4 · vs main ↑5 ↓1
-│       ├── 🌳 ✅ feat (feat, no upstream)
-│       └── 🌳 ⚠️ old ! worktree: gitdir file points to non-existent location
+│   ├── ❌ git-dirty [M?] (feature/tree ↑2) · main ↓4 · vs main ↑5 ↓1
+│   │   ├── 🌳 ✅ feat (feat, no upstream)
+│   │   └── 🌳 ⚠️ old ! worktree: gitdir file points to non-existent location
+│   ├── 🪵 locked.git ! worktrees: open worktrees: permission denied
+│   └── 🪵 plain.git (2 worktrees)
+│       ├── 🌳 ❌ plain-feat [M] (feat, no upstream)
+│       └── 🌳 ✅ plain-main
+├── 🪵 lonely.git (0 worktrees)
 ├── ✅ scratch (wip, no upstream) · vs main ↑0 ↓0
+├── 🪵 single.git (1 worktree)
+│   └── 🌳 ✅ wt
 └── ✅ tagged (v1.0)
 
-Found 9 git repositories in 0.21s
+Found 14 git repositories in 0.21s

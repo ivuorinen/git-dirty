@@ -121,6 +121,70 @@ func TestListWorktrees(t *testing.T) {
 	}
 }
 
+// TestListWorktrees_BareRepository lists from a folder that is itself the
+// git directory, including a worktree whose files are inside that folder.
+func TestListWorktrees_BareRepository(t *testing.T) {
+	for _, f := range formats {
+		t.Run(f.Name, func(t *testing.T) {
+			plain := filepath.Join(bareLayouts(t, f), "plain.git")
+			wts, linked, err := ListWorktrees(plain)
+			if err != nil || linked {
+				t.Fatalf("ListWorktrees: linked %v, err %v", linked, err)
+			}
+			want := porcelain(t, plain)
+			if len(want) != 2 || len(wts) != len(want) {
+				t.Fatalf("listed %d worktrees, git lists %d (want 2): %+v", len(wts), len(want), wts)
+			}
+			for _, wt := range wts {
+				if checkListed(t, wt, want) {
+					t.Errorf("%s: git marks it prunable", wt.ID)
+				}
+			}
+		})
+	}
+}
+
+// A file named worktrees is the same error on every platform: os.ReadDir
+// fails on it with ENOTDIR on Linux and macOS, but reads it as an empty
+// directory on Windows, which listed the repository with no worktrees.
+func TestListWorktrees_WorktreesFile(t *testing.T) {
+	dir := newRepo(t, SHA1)
+	if err := os.WriteFile(filepath.Join(dir, ".git", "worktrees"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if wts, _, err := ListWorktrees(dir); !errors.Is(err, errWorktreesNotDir) {
+		t.Errorf("got %+v, %v; want %v", wts, err, errWorktreesNotDir)
+	}
+}
+
+// A worktrees symlink to a directory is followed, as `git worktree list`
+// follows it, so the not-a-directory check must not reject it. Only the
+// listing is compared: git cannot open the worktree itself, because the
+// admin dir's relative commondir resolves from the symlink's target.
+func TestListWorktrees_WorktreesSymlink(t *testing.T) {
+	dir := worktreeRepo(t)
+	addWorktree(t, dir, filepath.Join(filepath.Dir(dir), "wt"))
+	admin := filepath.Join(dir, ".git", "worktrees")
+	moved := filepath.Join(t.TempDir(), "worktrees")
+	if err := os.Rename(admin, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, admin); err != nil {
+		t.Skip(err)
+	}
+	wts, _, err := ListWorktrees(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := porcelain(t, dir)
+	if len(want) != 1 || len(wts) != 1 {
+		t.Fatalf("listed %+v, git lists %v (want 1)", wts, want)
+	}
+	if _, ok := want[wts[0].Path]; !ok {
+		t.Errorf("listed %q, git lists %v", wts[0].Path, want)
+	}
+}
+
 func TestListWorktrees_Linked(t *testing.T) {
 	if wts, linked, err := ListWorktrees(newRepo(t, SHA1)); len(wts) != 0 || linked || err != nil {
 		t.Errorf("no worktrees: got %+v, %v, %v", wts, linked, err)

@@ -21,10 +21,12 @@ type Status struct {
 	Stashed   bool // $: refs/stash exists
 }
 
-// Result is everything known about one working tree. When Err is set, the
-// fields filled before the failing stage are still valid.
+// Result is everything known about one working tree, or about a bare
+// repository, of which only Bare is known. When Err is set, the fields
+// filled before the failing stage are still valid.
 type Result struct {
 	Path     string
+	Bare     bool // no working tree; nothing past the open stage is inspected
 	Head     Head
 	Status   Status
 	Upstream *Tracking      // nil without a configured upstream
@@ -41,8 +43,10 @@ func (r Result) Dirty() bool {
 		(r.Upstream != nil && r.Upstream.Ahead > 0)
 }
 
-// Inspect examines the working tree at path. It never returns an error
-// directly: failures are recorded in Result.Err, prefixed with the stage.
+// Inspect examines the working tree at path, or the bare repository at path,
+// of which it only opens the git dir and sets Result.Bare. It never returns
+// an error directly: failures are recorded in Result.Err, prefixed with the
+// stage.
 func Inspect(ctx context.Context, path string, opts Options) Result {
 	res := Result{Path: path}
 	res.Err = inspect(ctx, path, opts, &res)
@@ -61,6 +65,11 @@ func inspect(ctx context.Context, path string, opts Options, res *Result) (err e
 		}
 	}()
 
+	if r.repo.Bare {
+		res.Bare = true
+
+		return nil
+	}
 	if res.Head, err = r.head(); err != nil {
 		return fmt.Errorf("head: %w", err)
 	}

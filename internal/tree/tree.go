@@ -22,6 +22,19 @@ type Node struct {
 	sorted   bool
 }
 
+// Worktrees returns how many linked worktrees are listed under n, whether or
+// not a filter shows them.
+func (n *Node) Worktrees() int {
+	count := 0
+	for _, c := range n.children {
+		if c.Worktree {
+			count++
+		}
+	}
+
+	return count
+}
+
 // Tree is built from scan items by a single goroutine; it is not safe for
 // concurrent use.
 type Tree struct {
@@ -123,12 +136,30 @@ func (t *Tree) appendChildren(out *[]Line, n *Node, indent string, f Filter) {
 	}
 }
 
+// Problem reports whether a repository or worktree anywhere below n is dirty
+// or could not be read: what the dirty filter keeps, and what turns a
+// directory's icon into a warning. Being behind is not a problem.
+func (n *Node) Problem() bool {
+	for _, c := range n.children {
+		if (c.Repo != nil && failing(c.Repo)) || c.Problem() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// failing is the dirty filter's test for one repository or worktree.
+func failing(r *gitstat.Result) bool {
+	return r.Dirty() || r.Err != nil
+}
+
 // visible decides whether n is listed: repositories pass the dirty filter;
 // repositories and directories are listed when something below them is (a
 // repository's children are its worktrees); directories also, in verbose
 // mode without the dirty filter, when within the depth limit.
 func (t *Tree) visible(n *Node, f Filter) bool {
-	if n.Repo != nil && (!f.DirtyOnly || n.Repo.Dirty() || n.Repo.Err != nil) {
+	if n.Repo != nil && (!f.DirtyOnly || failing(n.Repo)) {
 		return true
 	}
 	for _, c := range n.children {

@@ -7,7 +7,8 @@ code in this repository.
 
 `git-dirty` is a Go CLI and TUI that walks a directory for git working trees and
 shows each one as a tree line: branch, dirty letters (`M S ? $`), ahead/behind
-against the upstream, and the comparison with the default branch. It replaces a
+against the upstream, and the comparison with the default branch. A bare
+repository is a 🪵 line with its worktrees under it. It replaces a
 bash script, kept as `scripts/git-dirty.sh` for `bench` and `compare.sh`, and
 keeps its flags and `GIT_DIRTY_*` environment variables.
 
@@ -38,7 +39,9 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
 - **internal/config/**: defaults < `config.json` < `GIT_DIRTY_*` env. Flags
   are applied in `main`.
 - **internal/git/**: stdlib-only readers for git's on-disk formats, SHA-1 and
-  SHA-256. `repository.go` (git dir, commondir, format check), `config.go`,
+  SHA-256. `repository.go` (git dir, commondir, format check; `IsGitDir`,
+  git's test for a folder that is itself a git dir; `Repository.Bare`, set for
+  such a folder or for `core.bare` without commondir), `config.go`,
   `refs.go` (loose, packed, symbolic; `ValidRefName`), `refspec.go`,
   `index.go` and `splitindex.go` (v2-v4, TREE, split index with EWAH),
   `odb.go`, `pack.go` and `delta.go` (loose objects, packs, deltas, a 16 MiB
@@ -58,12 +61,17 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
     late-bit recount.
   - `refs.go`: upstream mapping through fetch refspecs, and the default branch.
 - **internal/scan/**: discovery goroutine plus `GOMAXPROCS` workers. Every send
-  selects on `ctx.Done()`. A repository's linked worktrees are queued as its
+  selects on `ctx.Done()`. A folder holding `.git`, or passing
+  `gitrepo.IsGitDir` (a bare repository), is a repository and is not entered;
+  `gitstat.Inspect` stops at the open stage for a bare one (`Result.Bare`).
+  A repository's linked worktrees are queued as its
   children (`Item.Worktree`). A linked worktree the walk finds is held until
   the walk ends and sent only if no repository listed it, compared with
   `os.SameFile` because git records paths with symlinks resolved.
 - **internal/tree/**: builds the display tree and applies the verbose, depth and
-  dirty-only filters.
+  dirty-only filters. `Node.Problem` (a dirty or unreadable repository or
+  worktree below) is the dirty-only rule and also picks a directory's icon:
+  📁, or ⚠️ with a problem below.
 - **internal/render/**: tree lines become styled `Segment`s. Plain output writes
   ANSI codes; the TUI styles the same segments with lipgloss. `Sanitize` escapes
   control bytes in every string that comes from a repository.
@@ -77,8 +85,13 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
 - **Everything internal/git reads may come from a hostile clone.** Keep the
   limits: `maxObjectSize` (256 MiB), `maxDeltaDepth` (10,000), delta copy
   bounds, `maxEWAHBits`, `symrefMaxDepth` (5), `maxTagDepth`,
-  `maxTreeDepth` and `maxLinkFile` (4 KiB, regular files only, for `.git`
-  and `worktrees/<id>/gitdir` files). Validate ref names with `ValidRefName`
+  `maxTreeDepth`, `maxLinkFile` (4 KiB, regular files only, for `.git`,
+  `worktrees/<id>/gitdir` and `commondir` files), `maxConfigFile` (16 MiB,
+  `ReadConfigFile` through `OpenRegular`, so a symlink to a device fails)
+  and `maxHeadRef` (255 bytes of `HEAD` in `IsGitDir`, whose symlinked
+  `HEAD` is judged by its target, never followed). `IsGitDir` makes `Open`
+  reachable from checked-out content, not only from git-created `.git`
+  dirs. Validate ref names with `ValidRefName`
   before they become paths, since `branch.*.merge` comes from repository
   config. A decoder returns an error and never panics; the fuzz targets in
   `fuzz_test.go` check that, and a new decoder gets a fuzz target.
@@ -96,7 +109,8 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   `git ls-files --others --exclude-standard`, `git rev-list --left-right --count`,
   `git check-ignore`, `git ls-files --stage`, `git config --get`,
   `git show-ref`, `@{u}`, `git worktree list --porcelain` and
-  `git rev-parse --git-dir`/`--git-common-dir`. Object reads are checked by
+  `git rev-parse --git-dir`/`--git-common-dir`/`--is-inside-work-tree`.
+  Object reads are checked by
   re-hashing the content. Add a fixture there instead of a hand-written
   expected value. gitstat tables run in SHA-1 and SHA-256 repositories through
   `forEachFormat`.

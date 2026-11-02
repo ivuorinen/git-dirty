@@ -12,6 +12,10 @@ import (
 // (`git worktree list` marks it prunable).
 var errWorktreeMissing = errors.New("gitdir file points to non-existent location")
 
+// errWorktreesNotDir is returned for a worktrees entry that is not a
+// directory. Callers prefix it with what they were listing.
+var errWorktreesNotDir = errors.New("not a directory")
+
 // Worktree is a linked worktree recorded in a repository's worktrees/ dir.
 type Worktree struct {
 	ID   string // <id> under worktrees/: git's name for it
@@ -19,12 +23,13 @@ type Worktree struct {
 	Err  error  // why it cannot be inspected; Path may then be ""
 }
 
-// ListWorktrees lists the linked worktrees of the working tree at path, in
-// ID order. linked is true, with none listed, when path is itself a linked
-// worktree (its git dir has a commondir file). A worktree that cannot be
-// inspected is listed with Err set; errors name no path.
+// ListWorktrees lists the linked worktrees of the repository at path, a
+// working tree or a folder that is itself a git directory, in ID order.
+// linked is true, with none listed, when path is itself a linked worktree
+// (its git dir has a commondir file). A worktree that cannot be inspected is
+// listed with Err set; errors name no path.
 func ListWorktrees(path string) (wts []Worktree, linked bool, err error) {
-	gitDir, err := findGitDir(path)
+	gitDir, _, err := resolveGitDir(path)
 	if err != nil {
 		return nil, false, err
 	}
@@ -36,6 +41,11 @@ func ListWorktrees(path string) (wts []Worktree, linked bool, err error) {
 		return nil, false, err
 	}
 	dir := filepath.Join(gitDir, "worktrees")
+	// Stat, not Lstat: git follows a worktrees symlink. Checked before
+	// ReadDir because Go's ReadDir on Windows reads a file as an empty dir.
+	if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+		return nil, false, errWorktreesNotDir
+	}
 	entries, err := os.ReadDir(dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

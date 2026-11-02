@@ -1,10 +1,10 @@
 git-dirty  /home/u/Code
-Found 2 git repositories in 0.75s
+Found 3 git repositories in 0.75s
 ⚠️ /home/u/Code
+├── 🪵 bare.git (1 worktree)
+│   └── 🌳 ✅ wt
 ├── ✅ clean
 └── ❌ dirty [M] (feature, no upstream)
-
-
 
 
 

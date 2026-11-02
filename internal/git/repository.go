@@ -15,6 +15,10 @@ import (
 // one path.
 const maxLinkFile = 4096
 
+// maxHeadRef is how much of HEAD IsGitDir reads, as git's validate_headref
+// does.
+const maxHeadRef = 255
+
 // errNotRegular refuses a file that is not a regular file.
 var errNotRegular = errors.New("not a regular file")
 
@@ -25,37 +29,48 @@ type Repository struct {
 	CommonDir string // shared dir: config, refs, objects (== GitDir unless a linked worktree)
 	Format    Format
 	Config    *Config
+	Bare      bool // no working tree: the git dir itself, or core.bare without commondir
 
 	packed     map[string]packedRef // packed-refs, loaded on first use
 	packedRead bool
 	odb        *odb // object database, opened on first use
 }
 
-// OpenWorktree opens the repository of the working tree at path, which must
-// contain a .git directory or a .git file ("gitdir: <path>") as written for
-// linked worktrees and absorbed submodules.
+// OpenWorktree opens the repository at path: a working tree holding a .git
+// directory or a .git file ("gitdir: <path>"), as written for linked
+// worktrees and absorbed submodules, or a folder that is itself a git
+// directory, which has no working tree and is opened as bare.
 func OpenWorktree(path string) (*Repository, error) {
-	gitDir, err := findGitDir(path)
+	gitDir, self, err := resolveGitDir(path)
 	if err != nil {
 		return nil, err
 	}
+	r, err := Open(gitDir)
+	if err != nil {
+		return nil, err
+	}
+	if self {
+		r.Bare = true
+	}
 
-	return Open(gitDir)
+	return r, nil
 }
 
-// Open opens a git directory, following its commondir file if present.
+// Open opens a git directory, following its commondir file if present. The
+// commondir file is read as a link file: regular, at most maxLinkFile bytes.
 func Open(gitDir string) (*Repository, error) {
 	commonDir := gitDir
-	b, err := os.ReadFile(filepath.Clean(filepath.Join(gitDir, "commondir")))
+	linked := false
+	c, err := readLinkFile(filepath.Join(gitDir, "commondir"), "")
 	switch {
 	case err == nil:
-		c := strings.TrimSpace(string(b))
 		if !filepath.IsAbs(c) {
 			c = filepath.Join(gitDir, c)
 		}
 		commonDir = filepath.Clean(c)
+		linked = true
 	case !errors.Is(err, fs.ErrNotExist):
-		return nil, err
+		return nil, fmt.Errorf("commondir: %w", err)
 	}
 	cfg, err := ReadConfigFile(filepath.Join(commonDir, "config"))
 	if err != nil {
@@ -70,8 +85,35 @@ func Open(gitDir string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
+	bare, err := isBare(cfg, gitDir, linked)
+	if err != nil {
+		return nil, err
+	}
 
-	return &Repository{GitDir: gitDir, CommonDir: commonDir, Format: format, Config: cfg}, nil
+	return &Repository{GitDir: gitDir, CommonDir: commonDir, Format: format, Config: cfg, Bare: bare}, nil
+}
+
+// isBare is core.bare as git's check_repository_format_gently applies it.
+// Without extensions.worktreeConfig, the shared config's core.bare is
+// ignored in a linked worktree (has_common), which is why the worktrees of a
+// bare repository have working trees. With it, this git dir's
+// config.worktree may set core.bare, overriding the shared config, and the
+// result applies in a linked worktree too; git sparse-checkout moves a bare
+// repository's core.bare there when it turns the extension on.
+func isBare(cfg *Config, gitDir string, linked bool) (bool, error) {
+	bare := cfg.Bool("core", "", "bare", false)
+	if !cfg.Bool("extensions", "", "worktreeconfig", false) {
+		return bare && !linked, nil
+	}
+	wt, err := ReadConfigFile(filepath.Join(gitDir, "config.worktree"))
+	if err != nil {
+		return false, err
+	}
+	if _, ok := wt.Get("core", "", "bare"); ok {
+		bare = wt.Bool("core", "", "bare", false)
+	}
+
+	return bare, nil
 }
 
 // Close releases the repository's open files: the pack and pack index files
@@ -102,6 +144,85 @@ func findGitDir(worktree string) (string, error) {
 	}
 
 	return filepath.Clean(dir), nil
+}
+
+// resolveGitDir returns the git dir of the working tree at path, or path
+// itself (self true) when path has no .git entry and is itself a git
+// directory. findGitDir stays strict: readWorktree's back-link check needs a
+// missing .git to read as missing, in git's wording.
+func resolveGitDir(path string) (gitDir string, self bool, err error) {
+	gitDir, err = findGitDir(path)
+	if errors.Is(err, fs.ErrNotExist) && IsGitDir(path) {
+		return path, true, nil
+	}
+
+	return gitDir, false, err
+}
+
+// IsGitDir reports whether dir is itself a git directory, by git's test
+// (is_git_directory in setup.c): a valid HEAD, and objects and refs
+// directories. HEAD is checked first, so a directory without one costs one
+// Lstat. A symlinked HEAD is judged by its target and not followed; a regular
+// file is read up to maxHeadRef bytes; anything else, and any error, fails.
+// Unlike git, IsGitDir does not follow a commondir file, so a linked
+// worktree's admin dir is not a git directory here.
+func IsGitDir(dir string) bool {
+	head := filepath.Join(dir, "HEAD")
+	fi, err := os.Lstat(head)
+	if err != nil {
+		return false
+	}
+	switch {
+	case fi.Mode()&fs.ModeSymlink != 0:
+		target, err := os.Readlink(head)
+		if err != nil || !strings.HasPrefix(target, "refs/") {
+			return false
+		}
+	case fi.Mode().IsRegular():
+		f, err := OpenRegular(head)
+		if err != nil {
+			return false
+		}
+		b, err := io.ReadAll(io.LimitReader(f, maxHeadRef))
+		_ = f.Close() // read-only
+		if err != nil || !validHeadRef(b) {
+			return false
+		}
+	default:
+		return false
+	}
+
+	return isDir(filepath.Join(dir, "objects")) && isDir(filepath.Join(dir, "refs"))
+}
+
+// validHeadRef reports whether b, the start of a HEAD file, is a symbolic
+// ref ("ref:", whitespace, "refs/...") or starts with an object ID. As git's
+// get_oid_hex, it reads 40 hex digits, which a SHA-256 ID also starts with.
+func validHeadRef(b []byte) bool {
+	if rest, ok := strings.CutPrefix(string(b), "ref:"); ok {
+		return strings.HasPrefix(strings.TrimLeft(rest, " \t\n\r"), "refs/")
+	}
+	if len(b) < 40 {
+		return false
+	}
+	for _, c := range b[:40] {
+		if !isHexDigit(c) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isHexDigit(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+// isDir follows symlinks, as git's access(2) does.
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+
+	return err == nil && fi.IsDir()
 }
 
 // OpenRegular opens p for reading if the opened file is a regular file. A
