@@ -117,7 +117,8 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   re-hashing the content. Add a fixture there instead of a hand-written
   expected value. gitstat tables run in SHA-1 and SHA-256 repositories through
   `forEachFormat`. Tests must pass with the newest and the oldest supported
-  git, both pinned in `mise.toml` (`test`/`test-race` and `test-oldest-git`).
+  git, both pinned in `mise.toml` (`test`/`test-race` and `test-oldest-git`)
+  for Linux and macOS; Windows uses the git on `PATH`.
   git rewords its messages between releases (2.56 reworded the error for a
   `.git` file naming a missing directory), so compare exit codes and output,
   not an error's wording, or accept each release's wording. A test that needs

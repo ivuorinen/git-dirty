@@ -43,8 +43,9 @@ go test ./internal/render/ -update             # rewrite golden files; review th
 The tests build real repositories with `git` and use git's own answers as the
 expected values. Add a fixture instead of a hand-written expected value.
 
-They run with two gits that `mise.toml` pins: the newest release, and 2.39.2,
-the oldest supported. git's messages change between releases, so compare its
+On Linux and macOS they run with two gits that `mise.toml` pins: the newest
+release, and 2.39.2, the oldest supported. On Windows they use the git on
+`PATH`. git's messages change between releases, so compare its
 exit codes and output rather than the wording of its errors. A test of a
 feature newer than 2.39 skips itself on an older git.
 
