@@ -15,16 +15,17 @@ keeps its flags and `GIT_DIRTY_*` environment variables.
 ## Development Commands
 
 ```bash
-mise install         # Go (go.mod toolchain line) and the pinned dev tools
+mise install         # Go (go.mod toolchain line), the newest git and the pinned dev tools
 mise run build       # Build ./git-dirty
-mise run test        # Run the full test suite (needs git on PATH)
+mise run test        # Run the full test suite with the newest git (mise.toml)
 mise run test-race   # Tests with the race detector
+mise run test-oldest-git  # Tests with the oldest supported git (2.39.2)
 mise run lint        # golangci-lint (.golangci.yml), no fixes: the CI check
 mise run lint:fix    # golangci-lint, applying its fixes
 mise run lint:all    # every pre-commit hook (prek) on every file
 mise run hooks:install  # install the prek pre-commit hook
 mise run vuln        # govulncheck
-mise run all         # lint + test-race + vuln + build (the CI gates)
+mise run all         # lint + test-race + test-oldest-git + vuln + build (the CI gates)
 mise run bench       # hyperfine against the bash script
 scripts/compare.sh   # per-repository equivalence with the bash script
 go test ./internal/gitstat/ -run TestModified  # One test
@@ -115,11 +116,13 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   Object reads are checked by
   re-hashing the content. Add a fixture there instead of a hand-written
   expected value. gitstat tables run in SHA-1 and SHA-256 repositories through
-  `forEachFormat`. Tests must pass with an older and a newer git: CI runs the
-  newest release, a local install is often older, and git rewords its
-  messages (2.56 reworded the error for a `.git` file naming a missing
-  directory), so compare exit codes and output, not an error's wording, or
-  accept each release's wording.
+  `forEachFormat`. Tests must pass with the newest and the oldest supported
+  git, both pinned in `mise.toml` (`test`/`test-race` and `test-oldest-git`).
+  git rewords its messages between releases (2.56 reworded the error for a
+  `.git` file naming a missing directory), so compare exit codes and output,
+  not an error's wording, or accept each release's wording. A test that needs
+  a newer git skips itself on an older one, as
+  `TestListWorktrees_RelativePaths` does without `--relative-paths`.
 - **Ahead/behind needs the late-bit recount.** Commits with equal timestamps,
   or clock skew, can deliver a tip's bit after a commit was counted;
   `walkState.add` uncounts and re-queues it. Mutating it away fails

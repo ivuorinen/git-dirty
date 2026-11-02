@@ -35,12 +35,18 @@ mise run lint:all   # every pre-commit hook on every file
 ```sh
 mise run test                                  # all tests
 mise run test-race                             # with the race detector
+mise run test-oldest-git                       # with the oldest supported git
 go test ./internal/gitstat/ -run TestModified  # one test
 go test ./internal/render/ -update             # rewrite golden files; review the diff
 ```
 
 The tests build real repositories with `git` and use git's own answers as the
 expected values. Add a fixture instead of a hand-written expected value.
+
+They run with two gits that `mise.toml` pins: the newest release, and 2.39.2,
+the oldest supported. git's messages change between releases, so compare its
+exit codes and output rather than the wording of its errors. A test of a
+feature newer than 2.39 skips itself on an older git.
 
 ## Adding a reader to `internal/git`
 
@@ -64,8 +70,8 @@ what.
 
 Open pull requests against `main`. CI runs these checks on every pull request:
 
-- Build, vet and test: golangci-lint, the race-enabled tests and the build,
-  on Linux
+- Build, vet and test: golangci-lint, the race-enabled tests, the tests with
+  the oldest supported git, and the build, on Linux
 - Test on macOS and Windows
 - Vulnerability scan: govulncheck
 - CodeQL
