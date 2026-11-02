@@ -348,6 +348,13 @@ func dotGitMissing(t *testing.T, _, wt string) {
 	writeFile(t, wt, ".git", "gitdir: "+filepath.Join(t.TempDir(), "nowhere")+"\n")
 }
 
+// dotGitUnsearchable points the worktree's .git file into a directory that
+// cannot be searched: the permission error, without the path.
+func dotGitUnsearchable(t *testing.T, _, wt string) {
+	t.Helper()
+	writeFile(t, wt, ".git", "gitdir: "+unsearchableDir(t)+"\n")
+}
+
 func TestListWorktrees_Hostile(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -360,6 +367,7 @@ func TestListWorktrees_Hostile(t *testing.T) {
 		{"gitdir names no .git file", gitdirNotDotGit, "invalid gitdir file: does not name a .git file"},
 		{"worktree .git leads to another repository", dotGitElsewhere, "worktree .git file names another git dir"},
 		{"worktree .git names a missing directory", dotGitMissing, "invalid .git file: not a git repository"},
+		{"worktree .git names an unsearchable directory", dotGitUnsearchable, "invalid .git file: permission denied"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir, admin, wt := oneWorktree(t)

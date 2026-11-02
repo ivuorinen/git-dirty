@@ -140,7 +140,11 @@ var errNotGitRepo = errors.New("not a git repository")
 // errNotGitRepo, followed by the directory, as git up to 2.55 does. It is not
 // fs.ErrNotExist, which readWorktree takes for a missing worktree. Without
 // the check, Open read the missing dir's commondir and config as absent, and
-// the first error was HEAD: reference not found.
+// the first error was HEAD: reference not found. Any other failure to stat
+// the directory, such as a parent that cannot be searched or an I/O error, is
+// returned as itself, without its path: git reports that as not a git
+// repository too, but the directory may be there, and calling it missing
+// would misname the cause.
 func findGitDir(worktree string) (string, error) {
 	p := filepath.Join(worktree, ".git")
 	fi, err := os.Lstat(p)
@@ -158,8 +162,13 @@ func findGitDir(worktree string) (string, error) {
 		dir = filepath.Join(worktree, dir)
 	}
 	dir = filepath.Clean(dir)
-	if !isDir(dir) {
+	// Stat follows symlinks, as git's access(2) does.
+	fi, err = os.Stat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR), err == nil && !fi.IsDir():
 		return "", fmt.Errorf("%s: %w: %s", p, errNotGitRepo, dir)
+	case err != nil:
+		return "", fmt.Errorf("%s: %w", p, pathless(err))
 	}
 
 	return dir, nil
