@@ -16,6 +16,12 @@ var errWorktreeMissing = errors.New("gitdir file points to non-existent location
 // directory. Callers prefix it with what they were listing.
 var errWorktreesNotDir = errors.New("not a directory")
 
+// ErrOtherGitDir is a listed worktree's Err when the worktree's .git file does
+// not lead back to the admin dir that lists it: a stale record whose folder
+// now belongs to another repository, or a crafted gitdir file. The folder is
+// not this repository's worktree, so the scan must not claim it.
+var ErrOtherGitDir = errors.New("worktree .git file names another git dir")
+
 // Worktree is a linked worktree recorded in a repository's worktrees/ dir.
 type Worktree struct {
 	ID   string // <id> under worktrees/: git's name for it
@@ -100,7 +106,7 @@ func readWorktree(admin, id string) Worktree {
 	ai, aerr := os.Stat(admin)
 	bi, berr := os.Stat(back)
 	if aerr != nil || berr != nil || !os.SameFile(ai, bi) {
-		wt.Err = errors.New("worktree .git file names another git dir")
+		wt.Err = ErrOtherGitDir
 	}
 
 	return wt

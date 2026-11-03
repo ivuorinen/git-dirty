@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -208,6 +209,68 @@ func TestListWorktrees_Linked(t *testing.T) {
 	}
 }
 
+// relativeWorktrees makes a repository with two linked worktrees, beside it
+// and nested in it, that git records with relative paths: git 2.48's
+// `git worktree add --relative-paths`, which also sets
+// extensions.relativeWorktrees. dir has its symlinks resolved, as the paths
+// git records do. The test is skipped on a git without --relative-paths.
+func relativeWorktrees(t *testing.T) (dir string) {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(worktreeRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(filepath.Dir(dir), "sibling"), filepath.Join(dir, ".worktrees", "nested")} {
+		out, code := runCode(t, dir, nil, "worktree", "add", "-q", "--detach", "--relative-paths", p)
+		switch {
+		case code != 0 && strings.Contains(out, "unknown option"):
+			t.Skipf("git before 2.48 has no --relative-paths: %s", out)
+		case code != 0:
+			t.Fatalf("git worktree add --relative-paths: exit %d: %s", code, out)
+		}
+		if got, err := readLinkFile(filepath.Join(p, ".git"), "gitdir:"); err != nil || filepath.IsAbs(got) {
+			t.Fatalf("%s/.git names %q, %v; want a relative path", p, got, err)
+		}
+	}
+	got := run(t, dir, "config", "--bool", "--get", "extensions.relativeWorktrees")
+	if on, err := strconv.ParseBool(got); err != nil || !on {
+		t.Fatalf("extensions.relativeWorktrees = %q, want true", got)
+	}
+
+	return dir
+}
+
+// TestListWorktrees_RelativePaths: worktrees git records with relative paths
+// are listed where git lists them, and they and their repository open, which
+// needs extensions.relativeWorktrees to be a known extension.
+func TestListWorktrees_RelativePaths(t *testing.T) {
+	dir := relativeWorktrees(t)
+	wts, linked, err := ListWorktrees(dir)
+	if err != nil || linked {
+		t.Fatalf("ListWorktrees: linked %v, err %v", linked, err)
+	}
+	want := porcelain(t, dir)
+	if len(want) != 2 || len(wts) != len(want) {
+		t.Fatalf("listed %d worktrees, git lists %d (want 2): %+v", len(wts), len(want), wts)
+	}
+	paths := append(make([]string, 0, 1+len(wts)), dir)
+	for _, wt := range wts {
+		if checkListed(t, wt, want) {
+			t.Errorf("%s: git marks it prunable", wt.ID)
+		}
+		paths = append(paths, wt.Path)
+	}
+	for _, p := range paths {
+		r, err := OpenWorktree(p)
+		if err != nil {
+			t.Errorf("OpenWorktree(%s): %v", p, err)
+
+			continue
+		}
+		_ = r.Close() // read-only
+	}
+}
+
 // oneWorktree makes a repository with one linked worktree, wt, outside it.
 // It returns the repository, the worktree's admin dir and the worktree.
 func oneWorktree(t *testing.T) (dir, admin, wt string) {
@@ -277,6 +340,21 @@ func dotGitElsewhere(t *testing.T, _, wt string) {
 	writeFile(t, wt, ".git", "gitdir: "+filepath.Join(other, ".git", "worktrees", "wt")+"\n")
 }
 
+// dotGitMissing points the worktree's .git file at a directory that does
+// not exist: git's "not a git repository", without the path, and not the
+// missing-worktree error.
+func dotGitMissing(t *testing.T, _, wt string) {
+	t.Helper()
+	writeFile(t, wt, ".git", "gitdir: "+filepath.Join(t.TempDir(), "nowhere")+"\n")
+}
+
+// dotGitUnsearchable points the worktree's .git file into a directory that
+// cannot be searched: the permission error, without the path.
+func dotGitUnsearchable(t *testing.T, _, wt string) {
+	t.Helper()
+	writeFile(t, wt, ".git", "gitdir: "+unsearchableDir(t)+"\n")
+}
+
 func TestListWorktrees_Hostile(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -288,6 +366,8 @@ func TestListWorktrees_Hostile(t *testing.T) {
 		{"gitdir links to /dev/zero", gitdirDevZero, "invalid gitdir file: not a regular file"},
 		{"gitdir names no .git file", gitdirNotDotGit, "invalid gitdir file: does not name a .git file"},
 		{"worktree .git leads to another repository", dotGitElsewhere, "worktree .git file names another git dir"},
+		{"worktree .git names a missing directory", dotGitMissing, "invalid .git file: not a git repository"},
+		{"worktree .git names an unsearchable directory", dotGitUnsearchable, "invalid .git file: permission denied"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir, admin, wt := oneWorktree(t)

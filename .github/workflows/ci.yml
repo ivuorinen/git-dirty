@@ -49,6 +49,9 @@ jobs:
       - name: Test with race detector
         run: mise run test-race
 
+      - name: Test with the oldest supported git
+        run: mise run test-oldest-git
+
       - name: Build
         run: mise run build
 

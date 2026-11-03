@@ -1,6 +1,8 @@
 package git
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -300,5 +302,87 @@ func TestIsGitDir_WorktreeAdminDir(t *testing.T) {
 	}
 	if IsGitDir(admin) {
 		t.Error("IsGitDir(admin dir) = true, want false: commondir is not followed")
+	}
+}
+
+// unsearchableDir returns a path inside a directory that cannot be searched
+// (mode 0), so os.Stat on it fails with a permission error instead of finding
+// it missing. Windows does not apply the mode to directories and root ignores
+// it, so the test is skipped wherever that Stat is not refused.
+func unsearchableDir(t *testing.T) string {
+	t.Helper()
+	locked := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	// No chmod back for cleanup: rmdir of an empty directory needs only the
+	// parent's permissions, so TempDir's RemoveAll removes it as it is.
+	p := filepath.Join(locked, "gitdir")
+	if _, err := os.Stat(p); !errors.Is(err, fs.ErrPermission) {
+		t.Skipf("mode 0 does not stop this user searching a directory: %v", err)
+	}
+
+	return p
+}
+
+// A .git file naming a directory in a parent that cannot be searched fails
+// with the permission error, not "not a git repository": the directory may
+// exist, and calling it missing would misname the cause.
+func TestOpenWorktree_UnsearchableGitDir(t *testing.T) {
+	wt := t.TempDir()
+	writeFile(t, wt, ".git", "gitdir: "+unsearchableDir(t)+"\n")
+	_, err := OpenWorktree(wt)
+	if !errors.Is(err, fs.ErrPermission) || errors.Is(err, errNotGitRepo) {
+		t.Errorf("OpenWorktree: %v; want a permission error, not %q", err, errNotGitRepo)
+	}
+}
+
+// gitNotARepo reports whether out is git's error for a .git file at path that
+// names target, a directory that is not a git directory. git up to 2.55 says
+// "not a git repository: <target>"; 2.56 reworded it to "gitfile does not
+// point to a valid repository: <path>/.git", with path as git resolved it
+// (symlinks and Windows short names expanded), so only its last element is
+// compared.
+func gitNotARepo(out, path, target string) bool {
+	return strings.Contains(out, "not a git repository: "+target) ||
+		(strings.Contains(out, "gitfile does not point to a valid repository: ") &&
+			strings.Contains(out, filepath.Base(path)+"/.git"))
+}
+
+// A .git file naming a git directory that does not exist is git's "not a
+// git repository" error, whichever wording the installed git uses. Open would
+// otherwise read the missing commondir and config as absent, and the first
+// failure would be HEAD, misnaming the cause. Cases: a worktree moved after
+// `git worktree prune` deleted its admin dir, a .git file naming a path that
+// never existed, and one naming a path under a regular file (ENOTDIR).
+func TestOpenWorktree_MissingGitDir(t *testing.T) {
+	dir := worktreeRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	addWorktree(t, dir, wt)
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(wt, moved); err != nil {
+		t.Fatal(err)
+	}
+	run(t, dir, "worktree", "prune")
+	never := t.TempDir()
+	writeFile(t, never, ".git", "gitdir: "+filepath.Join(never, "nowhere")+"\n")
+	underFile := t.TempDir()
+	writeFile(t, underFile, "file", "")
+	writeFile(t, underFile, ".git", "gitdir: "+filepath.Join(underFile, "file", "nowhere")+"\n")
+
+	for _, path := range []string{moved, never, underFile} {
+		target, err := readLinkFile(filepath.Join(path, ".git"), "gitdir:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(path))
+		out, code := runCode(t, path, nil, "rev-parse", "--git-dir")
+		if code == 0 || !gitNotARepo(out, path, target) {
+			t.Fatalf("git rev-parse: exit %d, %q; want git's error for a .git file naming %s", code, out, target)
+		}
+		want := "not a git repository: " + filepath.Clean(target)
+		if _, err := OpenWorktree(path); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("OpenWorktree(%s): %v; want %q", filepath.Base(path), err, want)
+		}
 	}
 }

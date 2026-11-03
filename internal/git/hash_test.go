@@ -82,6 +82,13 @@ func TestCheckFormat(t *testing.T) {
 			want:    SHA1,
 		},
 		{
+			// git 2.48's `git worktree add --relative-paths` sets it.
+			name:    "v1 relative worktrees",
+			version: "1",
+			ext:     map[string]string{"relativeworktrees": "true"},
+			want:    SHA1,
+		},
+		{
 			name:    "reftable refused",
 			version: "1",
 			ext:     map[string]string{"refstorage": "reftable"},

@@ -126,6 +126,25 @@ func (r *Repository) Close() error {
 	return r.odb.close()
 }
 
+// errNotGitRepo is git's wording up to 2.55 (read_gitfile_gently) for a .git
+// file that names a directory that is not there. git 2.56 reworded it to
+// "gitfile does not point to a valid repository" and names the .git file;
+// the error findGitDir returns names both.
+var errNotGitRepo = errors.New("not a git repository")
+
+// findGitDir returns the git dir of the working tree at worktree: its .git
+// directory, or the directory its .git file names. An error from a .git file
+// is "<.git path>: <cause>", and errors.Unwrap gives the cause without a path,
+// as readWorktree reports it. A missing .git is the fs.ErrNotExist from
+// Lstat, and only that: a .git file naming a missing directory fails with
+// errNotGitRepo, followed by the directory, as git up to 2.55 does. It is not
+// fs.ErrNotExist, which readWorktree takes for a missing worktree. Without
+// the check, Open read the missing dir's commondir and config as absent, and
+// the first error was HEAD: reference not found. Any other failure to stat
+// the directory, such as a parent that cannot be searched or an I/O error, is
+// returned as itself, without its path: git reports that as not a git
+// repository too, but the directory may be there, and calling it missing
+// would misname the cause.
 func findGitDir(worktree string) (string, error) {
 	p := filepath.Join(worktree, ".git")
 	fi, err := os.Lstat(p)
@@ -142,8 +161,17 @@ func findGitDir(worktree string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(worktree, dir)
 	}
+	dir = filepath.Clean(dir)
+	// Stat follows symlinks, as git's access(2) does.
+	fi, err = os.Stat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR), err == nil && !fi.IsDir():
+		return "", fmt.Errorf("%s: %w: %s", p, errNotGitRepo, dir)
+	case err != nil:
+		return "", fmt.Errorf("%s: %w", p, pathless(err))
+	}
 
-	return filepath.Clean(dir), nil
+	return dir, nil
 }
 
 // resolveGitDir returns the git dir of the working tree at path, or path

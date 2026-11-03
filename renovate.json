@@ -24,6 +24,20 @@
       ],
       "enabled": true,
       "semanticCommitType": "fix"
+    },
+    {
+      "description": [
+        "The test-oldest-git task runs the tests with the oldest git this project ",
+        "supports, pinned in its task tools on purpose (mise.toml says why). The ",
+        "newest git, conda:git under [tools], is updated as usual."
+      ],
+      "matchManagers": [
+        "mise"
+      ],
+      "matchDepTypes": [
+        "task-test-oldest-git-tools"
+      ],
+      "enabled": false
     }
   ]
 }

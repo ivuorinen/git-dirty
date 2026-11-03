@@ -14,6 +14,9 @@ var knownExtensions = map[string]bool{
 	"partialclone":    true,
 	"noop":            true,
 	"preciousobjects": true,
+	// git 2.48+: worktree .git and gitdir files may hold relative paths,
+	// which findGitDir and readWorktree resolve.
+	"relativeworktrees": true,
 }
 
 // checkFormat validates core.repositoryFormatVersion and the extensions

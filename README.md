@@ -224,8 +224,8 @@ Ignore rules follow git's: `core.excludesFile` (default
 ## Development
 
 ```sh
-mise run all            # golangci-lint, race-enabled tests, govulncheck, build: the CI gates
-mise run test
+mise run all            # golangci-lint, race-enabled tests, tests with the oldest git, govulncheck, build: the CI gates
+mise run test           # with the newest git; test-oldest-git with the oldest supported (2.39.2)
 mise run lint:fix       # golangci-lint with its fixes applied
 mise run hooks:install  # pre-commit hooks (prek): linters for Go, Markdown, YAML, workflows, shell
 mise run lint:all       # every pre-commit hook on every file

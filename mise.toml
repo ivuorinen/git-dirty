@@ -14,6 +14,17 @@ idiomatic_version_file_enable_tools = ["go"]
 # version of the code it checks, so check `golangci-lint version` when go.mod's
 # toolchain moves ahead of it (2.15.0 is built with go1.27.0).
 [tools]
+# git is the tests' oracle, and its behaviour and wording change between
+# releases, so the tests run with pinned gits: this one, the newest, for test
+# and test-race, and the oldest supported for test-oldest-git. mise's registry
+# has no git; the conda backend installs conda-forge's build, and only git's
+# own commands reach PATH, not those of the package's dependencies. Linux and
+# macOS only: on Windows mise starts a conda command through a .cmd launcher,
+# which cmd.exe parses with its own quoting rules (os/exec's Command docs)
+# and whose `call` expands `%` a second time, mangling arguments such as the
+# tests' --format=%(objectmode). Windows keeps the git on its PATH, as CI's
+# Windows job does.
+"conda:git" = { version = "2.56.0", os = ["linux", "macos"] }
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.9.0"
 golangci-lint = "2.15.0"
 goreleaser = "2.19.0"
@@ -36,6 +47,17 @@ run = "go test ./..."
 [tasks.test-race]
 description = "Run tests with the race detector"
 run = "go test -race ./..."
+
+# The oldest git the tests support: the 2.39 line, which Debian 12 ships
+# (2.39.2 is conda-forge's last build of it). An older git cannot build the
+# fixtures: `git ls-tree --format` needs 2.36. A test that needs a newer git
+# skips itself here. renovate.json keeps Renovate from bumping this pin. Like
+# the newest, it is Linux and macOS only; on Windows the task runs with the
+# git on PATH.
+[tasks.test-oldest-git]
+description = "Run all tests with the oldest supported git"
+tools = { "conda:git" = { version = "2.39.2", os = ["linux", "macos"] } }
+run = "go test ./..."
 
 [tasks.test-cov]
 description = "Run tests with a coverage summary"
@@ -166,5 +188,5 @@ echo "Tag $tag pushed. GitHub Actions will build, sign and publish the release."
 '''
 
 [tasks.all]
-description = "Lint, race-enabled tests, vulnerability scan and build: the CI gates"
-depends = ["lint", "test-race", "vuln", "build"]
+description = "Lint, race-enabled tests, tests with the oldest git, vulnerability scan and build: the CI gates"
+depends = ["lint", "test-race", "test-oldest-git", "vuln", "build"]
