@@ -32,7 +32,7 @@ hyperfine = "2.0.0"
 # Reads the Claude Code hook's JSON input (lint:hook).
 jq = "1.8.2"
 # Runs the .pre-commit-config.yaml hooks.
-prek = "0.5.7"
+prek = "0.5.9"
 # Computes the next version tag from the commit messages (release).
 svu = "3.4.1"
 
