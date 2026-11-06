@@ -34,7 +34,7 @@ jq = "1.8.2"
 # Runs the .pre-commit-config.yaml hooks.
 prek = "0.5.9"
 # Computes the next version tag from the commit messages (release).
-svu = "3.4.1"
+svu = "3.4.4"
 
 [tasks.build]
 description = "Build for the current platform"
