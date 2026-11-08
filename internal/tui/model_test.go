@@ -716,10 +716,11 @@ func TestView_Golden(t *testing.T) {
 }
 
 // golden compares a view of the 80x24 window with testdata/name, which
-// -update rewrites.
+// -update rewrites. The fixtures' paths are joined with the system's
+// separator, and the golden files store them with slashes.
 func golden(t *testing.T, name, content string) {
 	t.Helper()
-	rows := strings.Split(content, "\n")
+	rows := strings.Split(filepath.ToSlash(content), "\n")
 	if len(rows) > 24 {
 		t.Errorf("view is %d rows, taller than the 24-row window", len(rows))
 	}
