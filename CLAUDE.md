@@ -86,7 +86,9 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   line, kept by `Node.Path` across redraws. `actions.go`: `f`/`F`/`p`/`P`
   on the selected repository, one at a time, never during a scan, in a
   goroutine `stop` waits for, with a generation number of their own; a
-  rescan follows each.
+  rescan follows each. `mass.go`: `m`, the same actions on every listed
+  repository `Check` accepts (`massTargets`; a fetch skips worktrees listed
+  under their repository), one at a time, with a progress grid.
 - **internal/action/**: the TUI's fetch and pull. `Kind` (`Fetch`,
   `FetchPrune`, `Pull`, `PullRebase`), `Check` (which repositories an action
   runs on, from the `gitstat.Result`) and `Run`, the one place git-dirty runs

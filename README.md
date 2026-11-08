@@ -116,6 +116,7 @@ in the main-branch list that exists locally.
 | `F` | `git fetch --all --prune` in the selected repository, after y/n |
 | `p` | `git pull --ff-only --autostash` in the selected repository |
 | `P` | `git pull --rebase=true` in the selected repository, after y/n |
+| `m` | [Mass actions](#mass-actions): one of the four on every listed repository |
 | `?` | Full help |
 | `q` | Quit; asks first while an action runs |
 | `ctrl+c` | Quit at once |
@@ -151,6 +152,26 @@ uppercase key is the destructive variant of the lowercase one and asks first.
   `git stash list`.
 - `q` asks first while an action runs, because quitting interrupts git: an
   interrupted `P` can leave a rebase in progress (`git rebase --abort`).
+
+### Mass actions
+
+`m` opens a menu of the same four actions, each with how many listed
+repositories it would run on. What is listed is what runs: with `d` on, only
+the dirty and unreadable repositories. A fetch skips a worktree listed under
+its repository, because the repository's fetch updates the worktree's
+remote-tracking branches; a pull skips every repository `p` would refuse.
+
+Choosing an action opens its warning page: what the action changes, how many
+repositories it runs on, how many of them are bare, and how many are skipped
+and why. `y` starts the run and `esc` goes back.
+
+The run goes one repository at a time, in the order listed: worktrees of one
+repository share its refs and lock files. A grid shows one cell per
+repository: `□` waiting, `▣` running, `■` done, and a failure as a red `■`,
+or `✗` without color. `esc` stops the run after the running repository. When
+the run ends, each failure is listed with git's last line, and `enter` or
+`esc` goes back to the tree and rescans. Without git on `PATH`, the run ends
+at its first repository.
 
 ## Configuration
 
@@ -259,6 +280,8 @@ Ignore rules follow git's: `core.excludesFile` (default
   repository it finds. The fetch keys run git, which applies it.
 - 🪵 (U+1FAB5) is a Unicode 13 emoji. A terminal whose emoji font predates it
   prints a box in its place.
+- The mass-action grid's `□ ▣ ■` are East Asian ambiguous width: a terminal
+  that draws them two columns wide misaligns the grid.
 
 ## Development
 

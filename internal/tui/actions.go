@@ -99,14 +99,18 @@ func (m *Model) launch(k action.Kind, path string) tea.Cmd {
 	return tea.Batch(wait, m.spinner.Tick)
 }
 
-// finishAction reports a finished action in the status line and rescans,
-// which also re-reads the repository the action changed.
+// finishAction handles a finished action: the next target of a mass run,
+// or, for a single action, the status line and a rescan, which also
+// re-reads the repository the action changed.
 func (m *Model) finishAction(msg actionMsg) tea.Cmd {
 	if msg.gen != m.actGen || !m.busy {
 		return nil
 	}
-	m.busy = false
 	m.actCancel()
+	if m.mass != nil {
+		return m.massDone(msg)
+	}
+	m.busy = false
 	m.message = resultLine(msg.kind, msg.path, msg.res)
 
 	return tea.Batch(m.startScan(), m.spinner.Tick)

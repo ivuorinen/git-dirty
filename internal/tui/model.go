@@ -32,6 +32,7 @@ const (
 	keyYes       = "y"
 	keyNo        = "n"
 	keyEsc       = "esc"
+	keyEnter     = "enter"
 	keyForceQuit = "ctrl+c"
 )
 
@@ -105,6 +106,7 @@ type Model struct {
 
 	message string        // the last refusal or action result, until the next key
 	confirm *confirmation // an action's confirm page, when open
+	mass    *massRun      // the mass-action dialog, when open
 	askQuit bool          // q during an action: quitting interrupts git
 
 	spinner spinner.Model
@@ -225,8 +227,11 @@ func (m *Model) View() tea.View {
 		title = lipgloss.NewStyle().Bold(true).Render(title)
 	}
 	body, help := m.vp.View(), m.help.View(m.keys)
-	if m.confirm != nil {
+	switch {
+	case m.confirm != nil:
 		body, help = m.confirmView(), ""
+	case m.mass != nil:
+		body, help = m.massView(), ""
 	}
 	v := tea.NewView(strings.Join([]string{title, m.status(), body, help}, "\n"))
 	v.AltScreen = true
@@ -329,6 +334,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return m.quitKey(msg), true
 	case m.confirm != nil:
 		return m.confirmKey(msg), true
+	case m.mass != nil:
+		return m.massKey(msg), true
 	}
 
 	return m.browseKey(msg)
@@ -356,6 +363,8 @@ func (m *Model) browseKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		m.refresh()
 	case key.Matches(msg, m.keys.Rescan):
 		return m.rescan(), true
+	case key.Matches(msg, m.keys.Mass):
+		m.requestMass()
 	case key.Matches(msg, m.keys.Help):
 		m.showAll = !m.showAll
 		m.help.ShowAll = m.showAll
@@ -562,6 +571,7 @@ type keyMap struct {
 	Up, Down, PageUp, PageDown, Top, Bottom key.Binding
 	Filter, Branch, Rescan, Help, Quit      key.Binding
 	Fetch, FetchPrune, Pull, PullRebase     key.Binding
+	Mass                                    key.Binding
 }
 
 // actionKey pairs an action with its key.
@@ -592,6 +602,7 @@ func newKeyMap() keyMap {
 		FetchPrune: b([]string{"F"}, "F", "fetch, prune"),
 		Pull:       b([]string{"p"}, "p", "pull, fast-forward"),
 		PullRebase: b([]string{"P"}, "P", "pull, rebase"),
+		Mass:       b([]string{"m"}, "m", "mass actions"),
 	}
 }
 
@@ -607,7 +618,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Top, k.Bottom},
 		{k.Filter, k.Branch, k.Rescan},
 		{k.Fetch, k.FetchPrune, k.Pull, k.PullRebase},
-		{k.Help, k.Quit},
+		{k.Mass, k.Help, k.Quit},
 	}
 }
 
