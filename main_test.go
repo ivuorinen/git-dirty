@@ -21,8 +21,10 @@ var update = flag.Bool("update", false, "rewrite golden files")
 
 // Flags named by several tests.
 const (
-	flagPlain = "--plain"
-	flagDepth = "-d"
+	flagPlain  = "--plain"
+	flagDepth  = "-d"
+	flagHelp   = "-h"
+	flagConfig = "-config"
 )
 
 // isolateEnv clears every setting git-dirty and git read from the
@@ -208,6 +210,8 @@ func TestExpandShortFlags(t *testing.T) {
 		{"-vz", "-vz"},
 		{"-- -vac", "-- -vac"},
 		{"dir -tb", "dir -t -b"},
+		{flagConfig + " x", flagConfig + " x"},
+		{"-config=x -c", "-config=x -c"},
 	}
 	for _, tt := range tests {
 		in, want := strings.Fields(tt.in), strings.Fields(tt.want)
@@ -239,8 +243,17 @@ func TestParseArgs(t *testing.T) {
 		{"-t toggles truncate", "-t", func(o *options) { o.cfg.Truncate = false }},
 		{"--plain and -p", "--plain -p", func(o *options) { o.cfg.Interactive = false }},
 		{"dash-prefixed dir after --", "-v -- -weird", func(o *options) { o.cfg.Dir, o.cfg.Verbose = "-weird", true }},
-		{"help", "-h", func(o *options) { o.help = true }},
+		{"help", flagHelp, func(o *options) { o.help = true }},
 		{"version", "--version", func(o *options) { o.version = true }},
+		{"-config sets the path only", flagConfig + " x", func(o *options) { o.configPath = "x" }},
+		{"--config=", "--config=x", func(o *options) { o.configPath = "x" }},
+		{
+			"-config after the positional",
+			"/tmp/x -config y",
+			func(o *options) { o.cfg.Dir, o.configPath = "/tmp/x", "y" },
+		},
+		{"-c still toggles color", "-c", func(o *options) { o.cfg.Color = false }},
+		{"-config after -- is the directory", "-- -config", func(o *options) { o.cfg.Dir = flagConfig }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -284,6 +297,43 @@ func TestParseArgs_Errors(t *testing.T) {
 	}
 }
 
+// TestRun_ConfigFlag: every spelling of -config, before or after the
+// directory, loads that file instead of the default one, and -h names it.
+func TestRun_ConfigFlag(t *testing.T) {
+	home := isolateEnv(t)
+	writeFile := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(filepath.Join(home, ".config", "git-dirty", "config.json"), `{"maxDepth": 7}`)
+	custom := filepath.Join(t.TempDir(), "custom.json")
+	writeFile(custom, `{"maxDepth": 3}`)
+	for _, args := range [][]string{
+		{flagConfig, custom, flagHelp},
+		{"--config", custom, flagHelp},
+		{"-config=" + custom, flagHelp},
+		{t.TempDir(), flagConfig, custom, flagHelp},
+	} {
+		var out, errOut bytes.Buffer
+		if code := run(context.Background(), args, nil, &out, &errOut); code != exitOK {
+			t.Fatalf("run(%q) = %d: %s", args, code, errOut.String())
+		}
+		if !strings.Contains(out.String(), "(default: 3)") || !strings.Contains(out.String(), custom) {
+			t.Errorf("run(%q): help does not show the custom file's maxDepth 3 and its path:\n%s", args, out.String())
+		}
+	}
+	var out bytes.Buffer
+	if code := run(context.Background(), []string{flagHelp}, nil, &out, &bytes.Buffer{}); code != exitOK ||
+		!strings.Contains(out.String(), "(default: 7)") {
+		t.Errorf("without -config the default file is not read:\n%s", out.String())
+	}
+}
+
 func TestRunExitCodes(t *testing.T) {
 	isolateEnv(t)
 	file := filepath.Join(t.TempDir(), "file")
@@ -299,7 +349,8 @@ func TestRunExitCodes(t *testing.T) {
 		{[]string{"-x"}, exitUsage, "", "-h' for usage"},
 		{[]string{flagDepth}, exitUsage, "", "flag needs an argument"},
 		{[]string{flagDepth, "abc"}, exitUsage, "", "invalid value"},
-		{[]string{"-h"}, exitOK, "Usage: git-dirty", ""},
+		{[]string{flagConfig}, exitUsage, "", "flag needs an argument"},
+		{[]string{flagHelp}, exitOK, "Usage: git-dirty", ""},
 		{[]string{"--version"}, exitOK, "dev", ""},
 		{[]string{"-m", "0", t.TempDir()}, exitError, "", "maxDepth"},
 		{[]string{flagPlain, filepath.Join(t.TempDir(), "missing")}, exitError, "", "no such file"},

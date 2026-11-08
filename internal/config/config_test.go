@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -53,12 +54,58 @@ func writeConfig(t *testing.T, xdg, body string) {
 
 func TestLoad_NoFileGivesDefaults(t *testing.T) {
 	isolate(t)
-	cfg, err := Load()
+	cfg, err := Load("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(cfg, Defaults()) {
 		t.Fatalf("got %+v, want defaults %+v", cfg, Defaults())
+	}
+}
+
+// TestLoad_Path: Load reads the file it is given and not the XDG one, and a
+// missing file gives the defaults, as a missing XDG file does.
+func TestLoad_Path(t *testing.T) {
+	xdg := isolate(t)
+	writeConfig(t, xdg, `{"depth": 2}`)
+	custom := filepath.Join(t.TempDir(), "custom.json")
+	if err := os.WriteFile(custom, []byte(`{"maxDepth": 9}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Defaults()
+	want.MaxDepth = 9
+	if !reflect.DeepEqual(cfg, want) {
+		t.Errorf("Load(custom) = %+v\nwant %+v", cfg, want)
+	}
+	cfg, err = Load(filepath.Join(t.TempDir(), "missing.json"))
+	if err != nil || !reflect.DeepEqual(cfg, Defaults()) {
+		t.Errorf("Load(missing) = %+v, %v; want the defaults", cfg, err)
+	}
+}
+
+// TestLoadFile_IgnoresTheEnvironment: LoadFile is the file layer only;
+// ApplyEnv adds the environment on a copy.
+func TestLoadFile_IgnoresTheEnvironment(t *testing.T) {
+	xdg := isolate(t)
+	writeConfig(t, xdg, `{"depth": 2}`)
+	t.Setenv("GIT_DIRTY_DEPTH", "7")
+	file, err := LoadFile("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Depth != 2 {
+		t.Errorf("LoadFile depth = %d, want the file's 2", file.Depth)
+	}
+	eff, err := ApplyEnv(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.Depth != 7 || file.Depth != 2 {
+		t.Errorf("ApplyEnv depth = %d (file layer now %d), want 7 and the file layer unchanged", eff.Depth, file.Depth)
 	}
 }
 
@@ -118,7 +165,7 @@ func TestLoad_Precedence(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			cfg, err := Load()
+			cfg, err := Load("")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -128,6 +175,143 @@ func TestLoad_Precedence(t *testing.T) {
 				t.Errorf("got  %+v\nwant %+v", cfg, want)
 			}
 		})
+	}
+}
+
+// nonDefaultConfig changes one setting of each type from its default.
+func nonDefaultConfig() Config {
+	c := Defaults()
+	c.Dir, c.MaxDepth, c.CheckStash, c.Exclude = "/src", 9, true, []string{"tmp"}
+
+	return c
+}
+
+func TestSave_RoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.json") // the directory is created
+	want := nonDefaultConfig()
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("LoadFile(Save(c)) = %+v\nwant %+v", got, want)
+	}
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"dir"`, `"maxDepth"`, `"checkStash"`, `"exclude"`} {
+		if !strings.Contains(string(data), key) {
+			t.Errorf("saved file lacks %s:\n%s", key, data)
+		}
+	}
+	if strings.Contains(string(data), `"depth"`) {
+		t.Errorf("saved file holds a default value:\n%s", data)
+	}
+}
+
+func TestSave_DefaultsWriteAnEmptyObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(path, Defaults()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "{}" {
+		t.Errorf("Save(Defaults()) wrote %q, want {}", got)
+	}
+}
+
+func TestSave_FollowsASymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dotfiles", "git-dirty.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(link, nonDefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("config.json is no longer a symlink: %v", err)
+	}
+	got, err := LoadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, nonDefaultConfig()) {
+		t.Errorf("the symlink's target holds %+v", got)
+	}
+}
+
+func TestSave_KeepsTheMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix file modes")
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 0400, not the 0600 a temporary file starts with, so keeping the mode
+	// is what makes the test pass. The save renames over the file, so it
+	// need not be writable.
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, nonDefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o400 {
+		t.Errorf("mode after save = %o, want 400", got)
+	}
+	fresh := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(fresh, nonDefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(fresh); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("new file mode = %v, %v; want 600", fi.Mode().Perm(), err)
+	}
+}
+
+// TestSave_FailureLeavesNoTemporaryFile: a rename over a directory fails
+// after the temporary file is written.
+func TestSave_FailureLeavesNoTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.Mkdir(path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, nonDefaultConfig()); err == nil {
+		t.Fatal("Save over a directory succeeded")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("directory holds %q, want only config.json", names)
 	}
 }
 
@@ -153,7 +337,7 @@ func TestLoad_Errors(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			_, err := Load()
+			_, err := Load("")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
 			}

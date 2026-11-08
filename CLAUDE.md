@@ -35,11 +35,15 @@ go test ./internal/render/ -update  # Rewrite golden files; review the diff
 
 ## Architecture
 
-`main.go` loads config, parses flags (`expandShortFlags` + an `fs.Parse` loop so
+`main.go` parses the flags once over the defaults to find `-config`, loads
+that file, parses again over it (`expandShortFlags` + an `fs.Parse` loop so
 flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
 
 - **internal/config/**: defaults < `config.json` < `GIT_DIRTY_*` env. Flags
-  are applied in `main`.
+  are applied in `main`. `LoadFile` is the file layer, `ApplyEnv` adds the
+  environment, `Load` is both. `Save` writes only keys that differ from
+  `Defaults()`, through a temporary file renamed over the target (a
+  symlinked file's target), keeping its mode.
 - **internal/git/**: stdlib-only readers for git's on-disk formats, SHA-1 and
   SHA-256. `repository.go` (git dir, commondir, format check; `IsGitDir`,
   git's test for a folder that is itself a git dir; `Repository.Bare`, set for

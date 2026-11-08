@@ -179,8 +179,9 @@ Settings are read from, lowest to highest precedence: built-in defaults, the
 config file, environment variables, then flags.
 
 The config file is `$XDG_CONFIG_HOME/git-dirty/config.json`
-(`~/.config/git-dirty/config.json` when `XDG_CONFIG_HOME` is unset). Unknown
-keys are an error. Every key is optional:
+(`~/.config/git-dirty/config.json` when `XDG_CONFIG_HOME` is unset), or the
+file `--config FILE` names. A missing file means the defaults; `-h` shows the
+file in use. Unknown keys are an error. Every key is optional:
 
 ```json
 {

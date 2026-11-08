@@ -4,6 +4,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,22 +63,147 @@ func Path() (string, error) {
 	return filepath.Join(home, ".config", "git-dirty", "config.json"), nil
 }
 
-// Load returns the defaults overlaid with the config file (when it exists)
-// and then the environment.
-func Load() (Config, error) {
-	cfg := Defaults()
-	path, err := Path()
+// Load returns the defaults overlaid with the config file at path (when it
+// exists) and then the environment. An empty path means Path().
+func Load(path string) (Config, error) {
+	cfg, err := LoadFile(path)
 	if err != nil {
 		return cfg, err
 	}
-	if err := loadFile(path, &cfg); err != nil {
-		return cfg, err
+
+	return ApplyEnv(cfg)
+}
+
+// LoadFile returns the defaults overlaid with the config file at path, or
+// the defaults when it does not exist: the file layer, without the
+// environment. An empty path means Path().
+func LoadFile(path string) (Config, error) {
+	cfg := Defaults()
+	if path == "" {
+		p, err := Path()
+		if err != nil {
+			return cfg, err
+		}
+		path = p
 	}
-	if err := applyEnv(&cfg); err != nil {
-		return cfg, err
+	err := loadFile(path, &cfg)
+
+	return cfg, err
+}
+
+// ApplyEnv returns cfg overlaid with the GIT_DIRTY_* variables, VERBOSE and
+// NO_COLOR.
+func ApplyEnv(cfg Config) (Config, error) {
+	err := applyEnv(&cfg)
+
+	return cfg, err
+}
+
+// Save writes cfg to the config file at path, keeping only the settings that
+// differ from Defaults(), so a later change of a default still reaches the
+// user. A symlinked file is followed and its target replaced, as dotfile
+// managers link it. The file is written beside its target and renamed over
+// it, so a failed save leaves the old file whole; an existing file keeps its
+// mode, a new one is 0600, and a missing directory is created.
+func Save(path string, cfg Config) error {
+	data, err := nonDefault(cfg)
+	if err != nil {
+		return err
+	}
+	target, err := resolve(path)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0o600)
+	if fi, err := os.Stat(target); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
 	}
 
-	return cfg, nil
+	return replace(target, data, mode)
+}
+
+// nonDefault returns cfg as a JSON object holding only the keys whose values
+// differ from Defaults().
+func nonDefault(cfg Config) ([]byte, error) {
+	keys, err := jsonFields(cfg)
+	if err != nil {
+		return nil, err
+	}
+	defaults, err := jsonFields(Defaults())
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range keys {
+		if bytes.Equal(v, defaults[k]) {
+			delete(keys, k)
+		}
+	}
+	data, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+
+	return append(data, '\n'), nil
+}
+
+// jsonFields returns each JSON key of cfg with its compact encoding.
+func jsonFields(cfg Config) (map[string]json.RawMessage, error) {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+
+	return fields, json.Unmarshal(data, &fields)
+}
+
+// resolve returns the file a save replaces: path, or the target of path
+// when it is a symlink.
+func resolve(path string) (string, error) {
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return path, nil // created at path
+	case err != nil:
+		return "", err
+	case fi.Mode()&os.ModeSymlink == 0:
+		return path, nil
+	}
+
+	return filepath.EvalSymlinks(path)
+}
+
+// replace writes data to a temporary file in target's directory and renames
+// it over target. The temporary file is removed on every error.
+func replace(target string, data []byte, mode os.FileMode) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			err = errors.Join(err, os.Remove(tmp.Name()))
+		}
+	}()
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Chmod(mode); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmp.Name(), target)
 }
 
 func loadFile(path string, cfg *Config) (err error) {

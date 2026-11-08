@@ -43,7 +43,16 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	cfg, err := config.Load()
+	// The flags apply on top of the config file, and -config names the file,
+	// so a first parse over the defaults finds it. A parse error is the same
+	// in both passes and is reported here.
+	pre, err := parseArgs(args, config.Defaults())
+	if err != nil {
+		printf(stderr, "%s: %v\nRun '%s -h' for usage.\n", programName, err, programName)
+
+		return exitUsage
+	}
+	cfgPath, cfg, err := loadConfig(pre.configPath)
 	if err != nil {
 		printf(stderr, "%s: %v\n", programName, err)
 
@@ -57,7 +66,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	switch {
 	case opts.help:
-		writeHelp(stdout, cfg)
+		writeHelp(stdout, cfg, cfgPath)
 
 		return exitOK
 	case opts.version:
@@ -87,6 +96,20 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	return runPlain(ctx, cfg, scanOptions(cfg, ex), stdout, stderr)
+}
+
+// loadConfig loads the config file in use, the -config value or else the
+// default location, and returns its path with the settings.
+func loadConfig(flagValue string) (path string, cfg config.Config, err error) {
+	path = flagValue
+	if path == "" {
+		if path, err = config.Path(); err != nil {
+			return "", cfg, err
+		}
+	}
+	cfg, err = config.Load(path)
+
+	return path, cfg, err
 }
 
 // printf writes to stdout or stderr. A failed write to either has nowhere
@@ -255,9 +278,10 @@ func isTerminal(w any) bool {
 // options is the result of parsing the command line on top of the loaded
 // config.
 type options struct {
-	cfg     config.Config
-	help    bool
-	version bool
+	cfg        config.Config
+	configPath string // -config
+	help       bool
+	version    bool
 }
 
 // Short flags that take no value and short flags that take one, used to
@@ -267,8 +291,9 @@ const (
 	shortValues = "dem"
 )
 
-// longNames are the multi-letter flags; "-plain" must not be read as -p -l ...
-var longNames = map[string]bool{"plain": true, "version": true, "help": true}
+// longNames are the multi-letter flags; "-plain" must not be read as -p -l
+// ..., nor "-config" as -c -o ...
+var longNames = map[string]bool{"plain": true, "version": true, "help": true, "config": true}
 
 // expandShortFlags rewrites getopts-style clusters into one flag per argument:
 // -vac becomes -v -a -c, and -d3 becomes -d 3 (a value-taking letter consumes
@@ -388,6 +413,7 @@ func parseArgs(args []string, cfg config.Config) (options, error) {
 		return nil
 	})
 	fs.BoolVar(&opts.version, "version", false, "")
+	fs.StringVar(&opts.configPath, "config", "", "")
 
 	args = expandShortFlags(args)
 	var rest []string
@@ -435,11 +461,9 @@ func onOff(b bool) string {
 	return "off"
 }
 
-func writeHelp(w io.Writer, cfg config.Config) {
-	path, err := config.Path()
-	if err != nil {
-		path = "(unavailable: " + err.Error() + ")"
-	}
+// writeHelp prints the usage, with the defaults cfg gives and path, the
+// config file in use.
+func writeHelp(w io.Writer, cfg config.Config, path string) {
 	// One quoted string per line keeps the text's two-space indents out of
 	// the source indentation, which .editorconfig requires to be tabs.
 	const help = "Usage: %[1]s [OPTIONS] [DIRECTORY]\n" +
@@ -458,6 +482,8 @@ func writeHelp(w io.Writer, cfg config.Config) {
 		"  -t           Toggle path truncation (currently: %[5]s)\n" +
 		"  -b           Toggle branch name display (currently: %[6]s)\n" +
 		"  --plain      Print plain output instead of the interactive view\n" +
+		"  --config FILE\n" +
+		"               Read settings from FILE, and save them there, instead of the default file\n" +
 		"  --version    Print the version and exit\n" +
 		"\n" +
 		"Status indicators:\n" +
