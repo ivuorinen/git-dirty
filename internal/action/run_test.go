@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -223,6 +224,20 @@ func TestRun_CancelStopsAStalledFetch(t *testing.T) {
 	defer srv.Close()
 	defer close(stop)
 	dir := remoteRepo(t, srv.URL+"/repo.git")
+	if runtime.GOOS == "windows" {
+		// Windows kills git alone. The git fetch it runs for the remote, and
+		// that fetch's remote helper, outlive it with the repository as their
+		// working directory, which Windows does not let t.TempDir remove. The
+		// deferred calls end the stall; this waits for them to exit.
+		t.Cleanup(func() {
+			for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+				if os.RemoveAll(dir) == nil {
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		})
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(300*time.Millisecond, cancel)
 	start := time.Now()
