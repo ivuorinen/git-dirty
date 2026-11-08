@@ -81,7 +81,8 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   ANSI codes; the TUI styles the same segments with lipgloss. `Sanitize` escapes
   control bytes in every string that comes from a repository.
 - **internal/tui/**: bubbletea v2 model. Results arrive in 50 ms batches; a scan
-  generation number drops results from a replaced scan.
+  generation number drops results from a replaced scan. A cursor selects a
+  line, kept by `Node.Path` across redraws.
 
 ## Rules that are easy to break
 

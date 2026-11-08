@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ var update = flag.Bool("update", false, "rewrite golden files")
 const (
 	root       = "/home/u/Code"
 	mainBranch = "main"
+	bareRepo   = "bare.git"
 )
 
 // feeder records every scan the model starts and hands it a channel the
@@ -93,11 +95,11 @@ func viewResults() []scan.Item {
 	wt := filepath.Join(root, "bare-wt")
 
 	return append(results(),
-		repo("bare.git", gitstat.Result{Bare: true}),
+		repo(bareRepo, gitstat.Result{Bare: true}),
 		scan.Item{
 			Kind:     scan.Repo,
 			Path:     wt,
-			Rel:      []string{"bare.git", "wt"},
+			Rel:      []string{bareRepo, "wt"},
 			Worktree: true,
 			Result:   gitstat.Result{Path: wt, Head: gitstat.Head{Branch: mainBranch, Label: mainBranch, Hash: h}},
 		},
@@ -167,7 +169,7 @@ func TestUpdate_FilterToggle(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.Update(batchMsg{gen: m.gen, items: results(), done: true})
 	before := len(m.lines())
-	press(m, "f")
+	press(m, "d")
 	after := m.lines()
 	if len(after) != before-1 {
 		t.Fatalf("dirty-only lines = %d, want %d", len(after), before-1)
@@ -175,9 +177,183 @@ func TestUpdate_FilterToggle(t *testing.T) {
 	if !strings.Contains(strings.Join(after, "\n"), "dirty") || strings.Contains(strings.Join(after, "\n"), "clean") {
 		t.Errorf("dirty-only view = %q", after)
 	}
-	press(m, "f")
+	press(m, "d")
 	if got := len(m.lines()); got != before {
 		t.Errorf("lines after toggling back = %d, want %d", got, before)
+	}
+}
+
+// dirtyRepos returns n dirty repositories, enough to scroll a small window;
+// the dirty filter keeps every one of them.
+func dirtyRepos(n int) []scan.Item {
+	items := make([]scan.Item, 0, 1+n)
+	items = append(items, scan.Item{Kind: scan.Dir, Path: root})
+	for i := range n {
+		items = append(items, repo(fmt.Sprintf("r%02d", i), gitstat.Result{
+			Head:   gitstat.Head{Branch: mainBranch, Label: mainBranch},
+			Status: gitstat.Status{Modified: true},
+		}))
+	}
+
+	return items
+}
+
+// TestUpdate_FilterKey: d is the dirty filter, f is not, and neither d nor
+// the viewport's other half-page keys scroll the view.
+func TestUpdate_FilterKey(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m.Update(batchMsg{gen: m.gen, items: dirtyRepos(30), done: true})
+	press(m, "f")
+	if strings.Contains(m.status(), "[dirty only]") {
+		t.Error("f turned on the dirty filter")
+	}
+	press(m, "G")
+	offset := m.vp.YOffset()
+	if offset == 0 {
+		t.Fatal("G did not scroll; the test needs a scrolled view")
+	}
+	press(m, "d")
+	if !strings.Contains(m.status(), "[dirty only]") {
+		t.Errorf("status after d = %q, want [dirty only]", m.status())
+	}
+	if got := m.vp.YOffset(); got != offset {
+		t.Errorf("YOffset after d = %d, want %d", got, offset)
+	}
+	halfPage := []tea.KeyPressMsg{{Code: 'u', Text: "u"}, {Code: 'u', Mod: tea.ModCtrl}, {Code: 'd', Mod: tea.ModCtrl}}
+	for _, k := range halfPage {
+		m.Update(k)
+		if got := m.vp.YOffset(); got != offset {
+			t.Errorf("YOffset after %s = %d, want %d", k.String(), got, offset)
+		}
+	}
+	press(m, "d")
+	if strings.Contains(m.status(), "[dirty only]") {
+		t.Errorf("status after a second d = %q", m.status())
+	}
+}
+
+// cursorVisible fails the test unless the cursor line is inside the view
+// and drawn with the cursor gutter.
+func cursorVisible(t *testing.T, m *Model) {
+	t.Helper()
+	top, h := m.vp.YOffset(), m.vp.Height()
+	if m.cursor < top || m.cursor >= top+h {
+		t.Fatalf("cursor %d outside the view, rows %d-%d", m.cursor, top, top+h-1)
+	}
+	row := strings.Split(m.vp.View(), "\n")[m.cursor-top]
+	if !strings.HasPrefix(row, "> ") {
+		t.Errorf("cursor row %q lacks the cursor gutter", row)
+	}
+}
+
+func TestCursor_ClampsAtBothEnds(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.Update(batchMsg{gen: m.gen, items: results(), done: true})
+	press(m, "k")
+	if m.cursor != 0 {
+		t.Errorf("cursor after k on the first line = %d, want 0", m.cursor)
+	}
+	press(m, "j")
+	press(m, "j")
+	press(m, "j")
+	if want := len(m.rows) - 1; m.cursor != want {
+		t.Errorf("cursor after j past the last line = %d, want %d", m.cursor, want)
+	}
+	press(m, "g")
+	if m.cursor != 0 {
+		t.Errorf("cursor after g = %d, want 0", m.cursor)
+	}
+	press(m, "G")
+	if want := len(m.rows) - 1; m.cursor != want {
+		t.Errorf("cursor after G = %d, want %d", m.cursor, want)
+	}
+	cursorVisible(t, m)
+}
+
+func TestCursor_FollowedByTheView(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m.Update(batchMsg{gen: m.gen, items: dirtyRepos(30), done: true})
+	h := m.vp.Height()
+	for range h + 2 {
+		press(m, "j")
+	}
+	if m.cursor != h+2 {
+		t.Fatalf("cursor = %d, want %d", m.cursor, h+2)
+	}
+	cursorVisible(t, m)
+	if got, want := m.vp.YOffset(), m.cursor-h+1; got != want {
+		t.Errorf("YOffset = %d, want %d: one line per step, cursor on the last row", got, want)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.cursor != 2*h+2 {
+		t.Errorf("cursor after pgdown = %d, want %d", m.cursor, 2*h+2)
+	}
+	cursorVisible(t, m)
+	press(m, " ")
+	press(m, "G")
+	cursorVisible(t, m)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if want := len(m.rows) - 1 - h; m.cursor != want {
+		t.Errorf("cursor after pgup = %d, want %d", m.cursor, want)
+	}
+	cursorVisible(t, m)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 7})
+	if m.vp.Height() >= h {
+		t.Fatalf("viewport height %d did not shrink from %d", m.vp.Height(), h)
+	}
+	cursorVisible(t, m)
+}
+
+// selectRepo moves the cursor down to the repository called name.
+func selectRepo(t *testing.T, m *Model, name string) {
+	t.Helper()
+	want := filepath.Join(root, name)
+	press(m, "g")
+	for range m.rows {
+		if m.rows[m.cursor].Node.Path == want {
+			return
+		}
+		press(m, "j")
+	}
+	t.Fatalf("%s is not listed", name)
+}
+
+// cursorPath returns the path of the line under the cursor.
+func cursorPath(m *Model) string {
+	return m.rows[m.cursor].Node.Path
+}
+
+func TestSelection_KeptWhenLinesAreAddedAbove(t *testing.T) {
+	m, _ := newTestModel(t)
+	items := results() // root, clean, dirty
+	m.Update(batchMsg{gen: m.gen, items: []scan.Item{items[0], items[2]}})
+	selectRepo(t, m, "dirty")
+	before := m.cursor
+	m.Update(batchMsg{gen: m.gen, items: []scan.Item{items[1]}, done: true})
+	if want := filepath.Join(root, "dirty"); cursorPath(m) != want {
+		t.Errorf("cursor on %s after a batch, want %s", cursorPath(m), want)
+	}
+	if m.cursor != before+1 {
+		t.Errorf("cursor index = %d, want %d: one line was added above", m.cursor, before+1)
+	}
+}
+
+// TestSelection_ReturnsAfterTheFilterHidIt: clean is the fourth line; the
+// filter leaves two, so the index alone would come back on bare.git.
+func TestSelection_ReturnsAfterTheFilterHidIt(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.Update(batchMsg{gen: m.gen, items: viewResults(), done: true})
+	selectRepo(t, m, "clean")
+	press(m, "d")
+	if cursorPath(m) == filepath.Join(root, "clean") {
+		t.Fatal("the dirty filter still lists the clean repository")
+	}
+	cursorVisible(t, m)
+	press(m, "d")
+	if want := filepath.Join(root, "clean"); cursorPath(m) != want {
+		t.Errorf("cursor on %s after d twice, want %s", cursorPath(m), want)
 	}
 }
 
@@ -255,7 +431,14 @@ func TestView_Golden(t *testing.T) {
 	if !v.AltScreen {
 		t.Error("view does not use the alternate screen")
 	}
-	rows := strings.Split(v.Content, "\n")
+	golden(t, "view-80x24.golden", v.Content)
+}
+
+// golden compares a view of the 80x24 window with testdata/name, which
+// -update rewrites.
+func golden(t *testing.T, name, content string) {
+	t.Helper()
+	rows := strings.Split(content, "\n")
 	if len(rows) > 24 {
 		t.Errorf("view is %d rows, taller than the 24-row window", len(rows))
 	}
@@ -265,7 +448,7 @@ func TestView_Golden(t *testing.T) {
 		rows[i] = strings.TrimRight(r, " ")
 	}
 	got := strings.Join(rows, "\n") + "\n"
-	path := filepath.Join("testdata", "view-80x24.golden")
+	path := filepath.Join("testdata", name)
 	if *update {
 		if err := os.MkdirAll("testdata", 0o750); err != nil {
 			t.Fatal(err)

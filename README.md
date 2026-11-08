@@ -83,10 +83,10 @@ a usage error, 130 when interrupted.
 | --- | --- |
 | ✅ / ❌ | Clean / dirty. Dirty means any status letter is set, or there are commits not pushed to the upstream. Being behind does not make a repository dirty. |
 | 📁 | A directory that is not a repository, with no dirty or unreadable repository or worktree anywhere below it. Repositories that are only behind their upstream do not change it. |
-| ⚠️ | A repository that could not be read (`! <error>`), or a directory with a dirty or unreadable repository or worktree below it: the directories the `f` view keeps |
+| ⚠️ | A repository that could not be read (`! <error>`), or a directory with a dirty or unreadable repository or worktree below it: the directories the `d` view keeps |
 | 🌳 | A linked worktree (`git worktree add`), listed under its repository, before its own ✅, ❌ or ⚠️ and the parts below. Its name is its ID under `.git/worktrees/` (`<bare>/worktrees/` for a bare repository), which git takes from the directory name. |
 | 🪵 | A bare repository: a git directory with no working tree, such as one made by `git clone --bare`, or a `.git` whose config sets `core.bare = true`. It has no status letters, branch or ✅/❌; its linked worktrees are listed under it, marked 🌳. |
-| `(N worktrees)` | After 🪵, how many linked worktrees the bare repository records, stale ones included. It stays the same when `f` hides some. When they cannot be listed, `! worktrees: <error>` replaces it. |
+| `(N worktrees)` | After 🪵, how many linked worktrees the bare repository records, stale ones included. It stays the same when `d` hides some. When they cannot be listed, `! worktrees: <error>` replaces it. |
 | `M` | Worktree differs from the index (`git diff --quiet` would fail) |
 | `S` | Index differs from HEAD (`git diff --cached --quiet` would fail) |
 | `?` | Untracked files that are not ignored (on by default; `GIT_DIRTY_CHECK_UNTRACKED=0` turns it off) |
@@ -104,9 +104,11 @@ in the main-branch list that exists locally.
 
 | Key | Action |
 | --- | --- |
-| `↑`/`k`, `↓`/`j`, `pgup`, `pgdn`/`space` | Scroll |
-| `g`/`home`, `G`/`end` | Top, bottom |
-| `f` | Show only dirty or failed repositories |
+| `↑`/`k`, `↓`/`j` | Move the cursor one line |
+| `pgup`, `pgdn`/`space` | Move the cursor one page |
+| `g`/`home`, `G`/`end` | First, last line |
+| `←`/`h`, `→`/`l` | Scroll sideways |
+| `d` | Show only dirty or failed repositories |
 | `b` | Toggle branch names |
 | `r` | Rescan |
 | `?` | Full help |

@@ -71,6 +71,16 @@ type Model struct {
 	dirtyOnly bool
 	showAll   bool // help expanded
 
+	// The listing as last drawn: the tree lines and their styled text,
+	// without the cursor gutter, so a cursor move redraws only the gutter.
+	rows   []tree.Line
+	styled []string
+	cursor int // index into rows
+	// selected is the path of the line the cursor keys last chose. The
+	// cursor returns to it whenever the listing changes, so lines added
+	// above it or a filter that hid it for a while do not move it.
+	selected string
+
 	spinner spinner.Model
 	vp      viewport.Model
 	help    help.Model
@@ -96,9 +106,11 @@ func New(ctx context.Context, cfg Config) *Model {
 		cfg.Now = time.Now
 	}
 	vp := viewport.New()
-	// f and b are this program's filter and branch toggles.
-	vp.KeyMap.PageDown = key.NewBinding(key.WithKeys("pgdown", "space"))
-	vp.KeyMap.PageUp = key.NewBinding(key.WithKeys("pgup"))
+	// The viewport keeps only its horizontal scrolling. Its vertical keys
+	// would scroll without the cursor (d, u, ctrl+d and ctrl+u half-page),
+	// and some are this program's own (f, b, d).
+	km := viewport.DefaultKeyMap()
+	vp.KeyMap = viewport.KeyMap{Left: km.Left, Right: km.Right}
 
 	m := &Model{
 		cfg:     cfg,
@@ -269,6 +281,11 @@ func (m *Model) addBatch(msg batchMsg) tea.Cmd {
 // handleKey runs the program's own key bindings. ok is false for any other
 // key, which then goes to the viewport.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
+	if n, ok := m.cursorStep(msg); ok {
+		m.move(n)
+
+		return nil, true
+	}
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		if m.cancel != nil {
@@ -288,10 +305,6 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		m.showAll = !m.showAll
 		m.help.ShowAll = m.showAll
 		m.layout()
-	case key.Matches(msg, m.keys.Top):
-		m.vp.GotoTop()
-	case key.Matches(msg, m.keys.Bottom):
-		m.vp.GotoBottom()
 	default:
 		return nil, false
 	}
@@ -299,13 +312,50 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 	return nil, true
 }
 
-// lines returns the tree as styled text, one string per row.
+// cursorStep returns how many lines a cursor key moves the cursor; ok is
+// false for any other key.
+func (m *Model) cursorStep(msg tea.KeyPressMsg) (n int, ok bool) {
+	switch {
+	case key.Matches(msg, m.keys.Up):
+		return -1, true
+	case key.Matches(msg, m.keys.Down):
+		return 1, true
+	case key.Matches(msg, m.keys.PageUp):
+		return -m.vp.Height(), true
+	case key.Matches(msg, m.keys.PageDown):
+		return m.vp.Height(), true
+	case key.Matches(msg, m.keys.Top):
+		return -len(m.rows), true
+	case key.Matches(msg, m.keys.Bottom):
+		return len(m.rows), true
+	}
+
+	return 0, false
+}
+
+// move moves the cursor n lines, stopping at the first and last line, and
+// selects the line it lands on.
+func (m *Model) move(n int) {
+	m.cursor = min(max(m.cursor+n, 0), len(m.rows)-1)
+	m.selected = m.rows[m.cursor].Node.Path
+	m.draw()
+}
+
+// lines returns the listing as styled text, one string per row, without
+// the cursor gutter.
 func (m *Model) lines() []string {
+	return m.styled
+}
+
+// refresh rebuilds the listing from the tree and the filters, and puts the
+// cursor on the selected line, or keeps its index, within the listing, when
+// that line is not listed.
+func (m *Model) refresh() {
 	f := m.cfg.Filter
 	f.DirtyOnly = m.dirtyOnly
-	tl := m.tree.Lines(f)
-	out := make([]string, 0, len(tl))
-	for _, l := range tl {
+	m.rows = m.tree.Lines(f)
+	m.styled = make([]string, len(m.rows))
+	for i, l := range m.rows {
 		var b strings.Builder
 		for _, s := range render.Line(l, m.cfg.Render) {
 			if st, ok := m.styles[s.Style]; ok && s.Text != "" {
@@ -314,21 +364,54 @@ func (m *Model) lines() []string {
 				b.WriteString(s.Text)
 			}
 		}
-		out = append(out, b.String())
+		m.styled[i] = b.String()
 	}
+	m.cursor = min(m.cursor, len(m.rows)-1)
+	for i, l := range m.rows {
+		if l.Node.Path == m.selected {
+			m.cursor = i
 
-	return out
+			break
+		}
+	}
+	m.draw()
 }
 
-func (m *Model) refresh() {
-	m.vp.SetContentLines(m.lines())
+// draw puts the listing into the viewport behind the cursor gutter and
+// scrolls the cursor into view.
+func (m *Model) draw() {
+	content := make([]string, len(m.styled))
+	for i, s := range m.styled {
+		gutter := "  "
+		if i == m.cursor {
+			gutter = "> "
+		}
+		content[i] = gutter + s
+	}
+	m.vp.SetContentLines(content)
+	m.follow()
 }
 
-// layout sizes the viewport between the two header rows and the help.
+// follow scrolls the view the least distance that shows the cursor line.
+// viewport.EnsureVisible is not used: it puts a line below the view at the
+// top, a page jump on every step past the bottom, and it resets the
+// horizontal scroll.
+func (m *Model) follow() {
+	switch h := m.vp.Height(); {
+	case m.cursor < m.vp.YOffset():
+		m.vp.SetYOffset(m.cursor)
+	case m.cursor >= m.vp.YOffset()+h:
+		m.vp.SetYOffset(m.cursor - h + 1)
+	}
+}
+
+// layout sizes the viewport between the two header rows and the help, and
+// keeps the cursor line in view.
 func (m *Model) layout() {
 	helpRows := lipgloss.Height(m.help.View(m.keys))
 	m.vp.SetWidth(m.width)
 	m.vp.SetHeight(max(1, m.height-2-helpRows))
+	m.follow()
 }
 
 func (m *Model) status() string {
@@ -367,7 +450,7 @@ func newKeyMap() keyMap {
 		PageDown: b([]string{"pgdown", "space"}, "pgdn", "page down"),
 		Top:      b([]string{"g", "home"}, "g", "top"),
 		Bottom:   b([]string{"G", "end"}, "G", "bottom"),
-		Filter:   b([]string{"f"}, "f", "dirty only"),
+		Filter:   b([]string{"d"}, "d", "dirty only"),
 		Branch:   b([]string{"b"}, "b", "branch names"),
 		Rescan:   b([]string{"r"}, "r", "rescan"),
 		Help:     b([]string{"?"}, "?", "help"),
