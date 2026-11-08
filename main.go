@@ -92,7 +92,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitError
 	}
 	if useTUI(cfg.Interactive, os.Getenv("TERM"), isTerminal(stdin), isTerminal(stdout)) {
-		return runTUI(ctx, cfg, ex, stdin, stdout, stderr)
+		return runTUI(ctx, session{args: args, path: cfgPath, ex: ex}, stdin, stdout, stderr)
 	}
 
 	return runPlain(ctx, cfg, scanOptions(cfg, ex), stdout, stderr)
@@ -135,22 +135,65 @@ func checkDir(dir string) error {
 	}
 }
 
+// session is what the browser's settings page needs to apply an edited
+// config file as startup did: the file's path, the command line, and the
+// git ignore configuration, read once.
+type session struct {
+	args []string
+	path string
+	ex   *gitstat.Excludes
+}
+
+// tuiConfig builds the browser's Config from the config file's layer: the
+// environment and the command line on top, then the same checks as at
+// startup.
+func (s session) tuiConfig(file config.Config) (tui.Config, error) {
+	cfg, err := config.ApplyEnv(file)
+	if err != nil {
+		return tui.Config{}, err
+	}
+	opts, err := parseArgs(s.args, cfg)
+	if err != nil {
+		return tui.Config{}, err
+	}
+	effective := opts.cfg
+	cfg = opts.cfg
+	if err := cfg.Normalize(); err != nil {
+		return tui.Config{}, err
+	}
+	if err := checkDir(cfg.Dir); err != nil {
+		return tui.Config{}, err
+	}
+
+	return tui.Config{
+		Root:        cfg.Dir,
+		Scan:        scanOptions(cfg, s.ex),
+		Render:      renderOptions(cfg),
+		Filter:      tree.Filter{Verbose: cfg.Verbose, Depth: cfg.Depth},
+		Color:       cfg.Color,
+		ConfigPath:  s.path,
+		File:        file,
+		Effective:   effective,
+		Reconfigure: s.tuiConfig,
+	}, nil
+}
+
 // runTUI shows the interactive browser until the user quits or a signal
 // arrives.
-func runTUI(
-	ctx context.Context,
-	cfg config.Config,
-	ex *gitstat.Excludes,
-	stdin io.Reader,
-	stdout, stderr io.Writer,
-) int {
-	err := tui.Run(ctx, tui.Config{
-		Root:   cfg.Dir,
-		Scan:   scanOptions(cfg, ex),
-		Render: renderOptions(cfg),
-		Filter: tree.Filter{Verbose: cfg.Verbose, Depth: cfg.Depth},
-		Color:  cfg.Color,
-	}, stdin, stdout)
+func runTUI(ctx context.Context, s session, stdin io.Reader, stdout, stderr io.Writer) int {
+	file, err := config.LoadFile(s.path)
+	if err != nil {
+		printf(stderr, "%s: %v\n", programName, err)
+
+		return exitError
+	}
+	tc, err := s.tuiConfig(file)
+	if err != nil {
+		printf(stderr, "%s: %v\n", programName, err)
+
+		return exitError
+	}
+	err = tui.Run(ctx, tc, stdin, stdout)
 	if ctx.Err() != nil {
 		return exitSignal
 	}

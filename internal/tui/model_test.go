@@ -34,12 +34,14 @@ const (
 // test controls.
 type feeder struct {
 	ctxs  []context.Context
+	opts  []scan.Options
 	feeds []chan scan.Item
 }
 
-func (f *feeder) start(ctx context.Context, _ scan.Options) <-chan scan.Item {
+func (f *feeder) start(ctx context.Context, opts scan.Options) <-chan scan.Item {
 	ch := make(chan scan.Item, 16)
 	f.ctxs = append(f.ctxs, ctx)
+	f.opts = append(f.opts, opts)
 	f.feeds = append(f.feeds, ch)
 
 	return ch

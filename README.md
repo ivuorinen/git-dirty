@@ -117,6 +117,7 @@ in the main-branch list that exists locally.
 | `p` | `git pull --ff-only --autostash` in the selected repository |
 | `P` | `git pull --rebase=true` in the selected repository, after y/n |
 | `m` | [Mass actions](#mass-actions): one of the four on every listed repository |
+| `s` | [Settings](#settings-page): edit the config file |
 | `?` | Full help |
 | `q` | Quit; asks first while an action runs |
 | `ctrl+c` | Quit at once |
@@ -216,6 +217,26 @@ file in use. Unknown keys are an error. Every key is optional:
 | `NO_COLOR` | | any non-empty value turns color off |
 
 `interactive` has no environment variable; `--plain` turns it off.
+
+### Settings page
+
+`s` in the browser opens the config file's settings as a form: every key
+except `interactive`, which only `--plain` turns off, so saving it off would
+leave editing the file as the only way back. The form shows the file's
+values, not the environment's or the flags'; a row that one of them
+overrides also shows `overridden:` and the value in effect.
+
+`↑`/`↓` choose a row and `enter` toggles a true/false row or edits the
+others: type, paste or backspace, then `enter` keeps the value and `esc`
+drops it. `exclude` and `mainBranches` are comma separated, as `-e` takes
+them. `ctrl+s` checks the settings as startup does (a missing `dir` is an
+error), writes the file and rescans with them; on an error nothing is
+written. `esc` leaves the page and drops unsaved edits.
+
+A save writes only the keys whose values differ from the defaults, so a
+later change of a default reaches you; a hand-written key equal to its
+default is dropped. A symlinked config file stays a symlink and its target
+is replaced. The file keeps its mode, and a new one is created `0600`.
 
 A directory is skipped when its name is in the exclude list or it contains a
 file named `.ignore`. To hide a repository, add an empty `.ignore` next to its

@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/ivuorinen/git-dirty/internal/action"
+	"github.com/ivuorinen/git-dirty/internal/config"
 	"github.com/ivuorinen/git-dirty/internal/render"
 	"github.com/ivuorinen/git-dirty/internal/scan"
 	"github.com/ivuorinen/git-dirty/internal/tree"
@@ -51,6 +52,18 @@ type Config struct {
 	Run func(context.Context, string, action.Kind) action.Result
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+
+	// The settings page. ConfigPath is the config file in use. File is its
+	// layer: the defaults and the file, without the environment or flags.
+	// Effective is the settings with both applied, before ~ is expanded,
+	// to show which rows they override. Reconfigure rebuilds the Config from
+	// an edited file layer as main does at startup; nil leaves the page
+	// unavailable. Save writes the file layer; nil means config.Save.
+	ConfigPath  string
+	File        config.Config
+	Effective   config.Config
+	Reconfigure func(config.Config) (Config, error)
+	Save        func(string, config.Config) error
 }
 
 // Run shows the browser until the user quits, then cancels any scan in
@@ -104,10 +117,11 @@ type Model struct {
 	actCancel context.CancelFunc
 	actDone   chan struct{}
 
-	message string        // the last refusal or action result, until the next key
-	confirm *confirmation // an action's confirm page, when open
-	mass    *massRun      // the mass-action dialog, when open
-	askQuit bool          // q during an action: quitting interrupts git
+	message  string        // the last refusal or action result, until the next key
+	confirm  *confirmation // an action's confirm page, when open
+	mass     *massRun      // the mass-action dialog, when open
+	settings *settingsPage // the settings page, when open
+	askQuit  bool          // q during an action: quitting interrupts git
 
 	spinner spinner.Model
 	vp      viewport.Model
@@ -150,14 +164,11 @@ func New(ctx context.Context, cfg Config) *Model {
 		vp:      vp,
 		help:    help.New(),
 		keys:    newKeyMap(),
-		styles:  styles(cfg.Color),
 		tree:    tree.New(cfg.Root),
 		width:   80,
 		height:  24,
 	}
-	if !cfg.Color {
-		m.help.Styles = help.Styles{}
-	}
+	m.applyColor()
 	m.layout()
 
 	return m
@@ -213,6 +224,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd, ok := m.handleKey(msg); ok {
 			return m, cmd
 		}
+
+	case tea.PasteMsg:
+		m.paste(msg.Content)
+
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
@@ -232,12 +248,31 @@ func (m *Model) View() tea.View {
 		body, help = m.confirmView(), ""
 	case m.mass != nil:
 		body, help = m.massView(), ""
+	case m.settings != nil:
+		body, help = m.settingsView(), ""
 	}
 	v := tea.NewView(strings.Join([]string{title, m.status(), body, help}, "\n"))
 	v.AltScreen = true
 	v.WindowTitle = "git-dirty"
 
 	return v
+}
+
+// applyColor styles the tree and the help for the color setting.
+func (m *Model) applyColor() {
+	m.styles = styles(m.cfg.Color)
+	m.help.Styles = help.New().Styles
+	if !m.cfg.Color {
+		m.help.Styles = help.Styles{}
+	}
+}
+
+// paste adds a terminal paste to the settings row being edited; elsewhere
+// a paste does nothing.
+func (m *Model) paste(s string) {
+	if m.settings != nil && m.settings.editing {
+		m.settings.insert(s)
+	}
 }
 
 // startScan cancels any running scan and begins a new one.
@@ -336,6 +371,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return m.confirmKey(msg), true
 	case m.mass != nil:
 		return m.massKey(msg), true
+	case m.settings != nil:
+		return m.settingsKey(msg), true
 	}
 
 	return m.browseKey(msg)
@@ -365,6 +402,8 @@ func (m *Model) browseKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return m.rescan(), true
 	case key.Matches(msg, m.keys.Mass):
 		m.requestMass()
+	case key.Matches(msg, m.keys.Settings):
+		m.requestSettings()
 	case key.Matches(msg, m.keys.Help):
 		m.showAll = !m.showAll
 		m.help.ShowAll = m.showAll
@@ -571,7 +610,7 @@ type keyMap struct {
 	Up, Down, PageUp, PageDown, Top, Bottom key.Binding
 	Filter, Branch, Rescan, Help, Quit      key.Binding
 	Fetch, FetchPrune, Pull, PullRebase     key.Binding
-	Mass                                    key.Binding
+	Mass, Settings                          key.Binding
 }
 
 // actionKey pairs an action with its key.
@@ -603,6 +642,7 @@ func newKeyMap() keyMap {
 		Pull:       b([]string{"p"}, "p", "pull, fast-forward"),
 		PullRebase: b([]string{"P"}, "P", "pull, rebase"),
 		Mass:       b([]string{"m"}, "m", "mass actions"),
+		Settings:   b([]string{"s"}, "s", "settings"),
 	}
 }
 
@@ -618,7 +658,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Top, k.Bottom},
 		{k.Filter, k.Branch, k.Rescan},
 		{k.Fetch, k.FetchPrune, k.Pull, k.PullRebase},
-		{k.Mass, k.Help, k.Quit},
+		{k.Mass, k.Settings, k.Help, k.Quit},
 	}
 }
 

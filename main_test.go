@@ -334,6 +334,36 @@ func TestRun_ConfigFlag(t *testing.T) {
 	}
 }
 
+// TestSession_TUIConfig: the settings page's Reconfigure applies the
+// environment and the command line over the edited file layer, as startup
+// does, and refuses a missing directory.
+func TestSession_TUIConfig(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("GIT_DIRTY_CHECK_STASH", "1")
+	file := config.Defaults()
+	file.Dir = t.TempDir()
+	file.MaxDepth = 9
+	s := session{args: []string{"-m", "4"}, path: "/x/config.json"}
+	tc, err := s.tuiConfig(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc.Scan.MaxDepth != 4 {
+		t.Errorf("maxDepth = %d, want the flag's 4 over the file's 9", tc.Scan.MaxDepth)
+	}
+	if !tc.Effective.CheckStash || tc.File.CheckStash {
+		t.Errorf("checkStash: effective %v, file %v; want the environment's true over the file's false",
+			tc.Effective.CheckStash, tc.File.CheckStash)
+	}
+	if tc.ConfigPath != s.path || tc.Reconfigure == nil {
+		t.Error("the config path or Reconfigure is not carried")
+	}
+	file.Dir = filepath.Join(file.Dir, "missing")
+	if _, err := s.tuiConfig(file); err == nil || !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("a missing dir: err = %v", err)
+	}
+}
+
 func TestRunExitCodes(t *testing.T) {
 	isolateEnv(t)
 	file := filepath.Join(t.TempDir(), "file")

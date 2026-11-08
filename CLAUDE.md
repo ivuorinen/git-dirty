@@ -38,6 +38,8 @@ go test ./internal/render/ -update  # Rewrite golden files; review the diff
 `main.go` parses the flags once over the defaults to find `-config`, loads
 that file, parses again over it (`expandShortFlags` + an `fs.Parse` loop so
 flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
+`session.tuiConfig` builds the TUI's settings from the file layer, at startup
+and again for each settings-page save.
 
 - **internal/config/**: defaults < `config.json` < `GIT_DIRTY_*` env. Flags
   are applied in `main`. `LoadFile` is the file layer, `ApplyEnv` adds the
@@ -93,6 +95,9 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   rescan follows each. `mass.go`: `m`, the same actions on every listed
   repository `Check` accepts (`massTargets`; a fetch skips worktrees listed
   under their repository), one at a time, with a progress grid.
+  `settings.go`: `s`, a form over the config file's layer (no `interactive`
+  row) with a line editor of its own: `bubbles/textinput` imports
+  `atotto/clipboard`, which runs clipboard programs on paste.
 - **internal/action/**: the TUI's fetch and pull. `Kind` (`Fetch`,
   `FetchPrune`, `Pull`, `PullRebase`), `Check` (which repositories an action
   runs on, from the `gitstat.Result`) and `Run`, the one place git-dirty runs
