@@ -8,7 +8,8 @@ code in this repository.
 `git-dirty` is a Go CLI and TUI that walks a directory for git working trees and
 shows each one as a tree line: branch, dirty letters (`M S ? $`), ahead/behind
 against the upstream, and the comparison with the default branch. A bare
-repository is a 🪵 line with its worktrees under it. It replaces a
+repository is a 🪵 line with its worktrees under it. The TUI can fetch and
+pull the selected repository. It replaces a
 bash script, kept as `scripts/git-dirty.sh` for `bench` and `compare.sh`, and
 keeps its flags and `GIT_DIRTY_*` environment variables.
 
@@ -82,7 +83,17 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   control bytes in every string that comes from a repository.
 - **internal/tui/**: bubbletea v2 model. Results arrive in 50 ms batches; a scan
   generation number drops results from a replaced scan. A cursor selects a
-  line, kept by `Node.Path` across redraws.
+  line, kept by `Node.Path` across redraws. `actions.go`: `f`/`F`/`p`/`P`
+  on the selected repository, one at a time, never during a scan, in a
+  goroutine `stop` waits for, with a generation number of their own; a
+  rescan follows each.
+- **internal/action/**: the TUI's fetch and pull. `Kind` (`Fetch`,
+  `FetchPrune`, `Pull`, `PullRebase`), `Check` (which repositories an action
+  runs on, from the `gitstat.Result`) and `Run`, the one place git-dirty runs
+  a program: `git` with fixed arguments in the repository's directory,
+  without git's repository-local environment variables, with no terminal
+  (`proc_unix.go`: `Setsid`, and SIGINT to the process group on cancel;
+  `proc_windows.go`: `CREATE_NO_WINDOW`), keeping the last 4 KiB of output.
 
 ## Rules that are easy to break
 
@@ -101,9 +112,16 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   before they become paths, since `branch.*.merge` comes from repository
   config. A decoder returns an error and never panics; the fuzz targets in
   `fuzz_test.go` check that, and a new decoder gets a fuzz target.
-- **Never execute `git` or anything else at runtime.** No hooks, no filters, no
-  fsmonitor. Tests may call `git`, because they use it as the oracle;
-  forbidigo rejects `exec.Command` outside `_test.go` files.
+- **Only internal/action runs a program, and only `git`.** It runs on a key
+  press in the TUI, with a fixed argv that holds nothing taken from a
+  repository (the repository is `cmd.Dir`, for a bare one too, so git
+  applies the user's `safe.bareRepository`), git's repository-local
+  environment variables stripped (`localEnv`, checked against
+  `git rev-parse --local-env-vars`), `GIT_TERMINAL_PROMPT=0` and no
+  terminal. Nothing else executes anything at runtime: the scan runs no
+  hooks, no filters, no fsmonitor. Tests may call `git`, because they use it
+  as the oracle; forbidigo rejects `exec.Command` outside `_test.go` files,
+  and `internal/action/run.go` holds the only `//nolint:forbidigo`.
 - **golangci-lint findings are fixed, not suppressed.** `//nolint:<linter> //
   <reason>` is only for code that is correct by design, such as `crypto/sha1`
   for git's object IDs or the tests' `exec.Command("git", ...)`; nolintlint

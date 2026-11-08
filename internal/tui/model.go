@@ -1,4 +1,5 @@
-// Package tui is the interactive, read-only tree browser.
+// Package tui is the interactive tree browser. Its fetch and pull keys run
+// git through internal/action; everything else only reads.
 package tui
 
 import (
@@ -15,6 +16,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/ivuorinen/git-dirty/internal/action"
 	"github.com/ivuorinen/git-dirty/internal/render"
 	"github.com/ivuorinen/git-dirty/internal/scan"
 	"github.com/ivuorinen/git-dirty/internal/tree"
@@ -23,6 +25,15 @@ import (
 // batchWindow is how long results are collected before the tree is redrawn,
 // capping redraws at 20 per second while a scan streams in.
 const batchWindow = 50 * time.Millisecond
+
+// The keys of the y/n questions, which the help does not list, and the
+// key that quits from every page.
+const (
+	keyYes       = "y"
+	keyNo        = "n"
+	keyEsc       = "esc"
+	keyForceQuit = "ctrl+c"
+)
 
 // Config is everything the browser needs from the command line.
 type Config struct {
@@ -34,6 +45,9 @@ type Config struct {
 
 	// Start begins a scan; nil means scan.Run. Tests substitute a feed.
 	Start func(context.Context, scan.Options) <-chan scan.Item
+	// Run runs an action in a repository; nil means action.Run. Tests
+	// substitute a fake.
+	Run func(context.Context, string, action.Kind) action.Result
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -81,6 +95,18 @@ type Model struct {
 	// above it or a filter that hid it for a while do not move it.
 	selected string
 
+	// The running action. actGen tags its result, and actDone is closed
+	// when its runner returns, so stop can wait for git.
+	busy      bool
+	running   string // what runs, for the status line: "fetch /path"
+	actGen    int
+	actCancel context.CancelFunc
+	actDone   chan struct{}
+
+	message string        // the last refusal or action result, until the next key
+	confirm *confirmation // an action's confirm page, when open
+	askQuit bool          // q during an action: quitting interrupts git
+
 	spinner spinner.Model
 	vp      viewport.Model
 	help    help.Model
@@ -101,6 +127,9 @@ type batchMsg struct {
 func New(ctx context.Context, cfg Config) *Model {
 	if cfg.Start == nil {
 		cfg.Start = scan.Run
+	}
+	if cfg.Run == nil {
+		cfg.Run = action.Run
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -166,8 +195,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case batchMsg:
 		return m, m.addBatch(msg)
 
+	case actionMsg:
+		return m, m.finishAction(msg)
+
 	case spinner.TickMsg:
-		if !m.scanning {
+		if !m.scanning && !m.busy {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -192,7 +224,11 @@ func (m *Model) View() tea.View {
 	if m.cfg.Color {
 		title = lipgloss.NewStyle().Bold(true).Render(title)
 	}
-	v := tea.NewView(strings.Join([]string{title, m.status(), m.vp.View(), m.help.View(m.keys)}, "\n"))
+	body, help := m.vp.View(), m.help.View(m.keys)
+	if m.confirm != nil {
+		body, help = m.confirmView(), ""
+	}
+	v := tea.NewView(strings.Join([]string{title, m.status(), body, help}, "\n"))
 	v.AltScreen = true
 	v.WindowTitle = "git-dirty"
 
@@ -243,14 +279,21 @@ func waitBatch(gen int, ch <-chan scan.Item) tea.Cmd {
 	}
 }
 
-// stop cancels the scan and waits for its goroutines to finish.
+// stop cancels the scan and any running action, and waits for the scan's
+// goroutines and for git to finish.
 func (m *Model) stop() {
 	if m.cancel != nil {
 		m.cancel()
 	}
+	if m.actCancel != nil {
+		m.actCancel()
+	}
 	if m.items != nil {
 		for range m.items {
 		}
+	}
+	if m.actDone != nil {
+		<-m.actDone
 	}
 }
 
@@ -278,21 +321,33 @@ func (m *Model) addBatch(msg batchMsg) tea.Cmd {
 	return waitBatch(m.gen, m.items)
 }
 
-// handleKey runs the program's own key bindings. ok is false for any other
-// key, which then goes to the viewport.
+// handleKey runs the program's own key bindings, by page. ok is false for
+// any other key, which then goes to the viewport.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
+	switch {
+	case m.askQuit:
+		return m.quitKey(msg), true
+	case m.confirm != nil:
+		return m.confirmKey(msg), true
+	}
+
+	return m.browseKey(msg)
+}
+
+// browseKey handles the tree page.
+func (m *Model) browseKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
+	m.message = ""
 	if n, ok := m.cursorStep(msg); ok {
 		m.move(n)
 
 		return nil, true
 	}
+	if k, ok := m.actionKind(msg); ok {
+		return m.requestAction(k), true
+	}
 	switch {
 	case key.Matches(msg, m.keys.Quit):
-		if m.cancel != nil {
-			m.cancel()
-		}
-
-		return tea.Quit, true
+		return m.requestQuit(msg), true
 	case key.Matches(msg, m.keys.Filter):
 		m.dirtyOnly = !m.dirtyOnly
 		m.refresh()
@@ -300,7 +355,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		m.cfg.Render.ShowBranch = !m.cfg.Render.ShowBranch
 		m.refresh()
 	case key.Matches(msg, m.keys.Rescan):
-		return tea.Batch(m.startScan(), m.spinner.Tick), true
+		return m.rescan(), true
 	case key.Matches(msg, m.keys.Help):
 		m.showAll = !m.showAll
 		m.help.ShowAll = m.showAll
@@ -310,6 +365,67 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 	}
 
 	return nil, true
+}
+
+// requestQuit quits, except that q asks first while an action runs:
+// quitting interrupts git, which can leave a rebase in progress. ctrl+c
+// quits at once.
+func (m *Model) requestQuit(msg tea.KeyPressMsg) tea.Cmd {
+	if m.busy && msg.String() != keyForceQuit {
+		m.askQuit = true
+
+		return nil
+	}
+
+	return m.quit()
+}
+
+// quitKey answers the quit question.
+func (m *Model) quitKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch msg.String() {
+	case keyYes, keyForceQuit:
+		return m.quit()
+	case keyNo, keyEsc:
+		m.askQuit = false
+	}
+
+	return nil
+}
+
+// quit cancels the scan and any running action, and ends the program.
+// stop then waits for both.
+func (m *Model) quit() tea.Cmd {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if m.actCancel != nil {
+		m.actCancel()
+	}
+
+	return tea.Quit
+}
+
+// rescan starts a new scan, unless an action runs: its own rescan follows.
+func (m *Model) rescan() tea.Cmd {
+	if m.busy {
+		m.message = "rescan: an action is running"
+
+		return nil
+	}
+
+	return tea.Batch(m.startScan(), m.spinner.Tick)
+}
+
+// actionKind returns the action an action key runs; ok is false for any
+// other key.
+func (m *Model) actionKind(msg tea.KeyPressMsg) (k action.Kind, ok bool) {
+	for _, ak := range m.keys.actionKeys() {
+		if key.Matches(msg, ak.binding) {
+			return ak.kind, true
+		}
+	}
+
+	return 0, false
 }
 
 // cursorStep returns how many lines a cursor key moves the cursor; ok is
@@ -421,13 +537,22 @@ func (m *Model) status() string {
 		noun = "repository"
 	}
 	var s string
-	if m.scanning {
+	switch {
+	case m.busy:
+		s = fmt.Sprintf("%s %s…", m.spinner.View(), m.running)
+	case m.scanning:
 		s = fmt.Sprintf("%s Scanning… %d %s, %d directories", m.spinner.View(), repos, noun, m.dirs)
-	} else {
+	default:
 		s = render.Summary(repos, m.elapsed)
 	}
 	if m.dirtyOnly {
 		s += "  [dirty only]"
+	}
+	if m.message != "" {
+		s += "  " + m.message
+	}
+	if m.askQuit {
+		s += "  Quit and interrupt git? y yes • n no"
 	}
 
 	return s
@@ -436,6 +561,13 @@ func (m *Model) status() string {
 type keyMap struct {
 	Up, Down, PageUp, PageDown, Top, Bottom key.Binding
 	Filter, Branch, Rescan, Help, Quit      key.Binding
+	Fetch, FetchPrune, Pull, PullRebase     key.Binding
+}
+
+// actionKey pairs an action with its key.
+type actionKey struct {
+	kind    action.Kind
+	binding key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -454,7 +586,12 @@ func newKeyMap() keyMap {
 		Branch:   b([]string{"b"}, "b", "branch names"),
 		Rescan:   b([]string{"r"}, "r", "rescan"),
 		Help:     b([]string{"?"}, "?", "help"),
-		Quit:     b([]string{"q", "ctrl+c"}, "q", "quit"),
+		Quit:     b([]string{"q", keyForceQuit}, "q", "quit"),
+
+		Fetch:      b([]string{"f"}, "f", "fetch"),
+		FetchPrune: b([]string{"F"}, "F", "fetch, prune"),
+		Pull:       b([]string{"p"}, "p", "pull, fast-forward"),
+		PullRebase: b([]string{"P"}, "P", "pull, rebase"),
 	}
 }
 
@@ -469,6 +606,17 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.PageUp, k.PageDown},
 		{k.Top, k.Bottom},
 		{k.Filter, k.Branch, k.Rescan},
+		{k.Fetch, k.FetchPrune, k.Pull, k.PullRebase},
 		{k.Help, k.Quit},
+	}
+}
+
+// actionKeys lists the actions with their keys, in menu order.
+func (k keyMap) actionKeys() []actionKey {
+	return []actionKey{
+		{action.Fetch, k.Fetch},
+		{action.FetchPrune, k.FetchPrune},
+		{action.Pull, k.Pull},
+		{action.PullRebase, k.PullRebase},
 	}
 }

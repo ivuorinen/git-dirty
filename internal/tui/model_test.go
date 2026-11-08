@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/ivuorinen/git-dirty/internal/action"
 	gitrepo "github.com/ivuorinen/git-dirty/internal/git"
 	"github.com/ivuorinen/git-dirty/internal/gitstat"
 	"github.com/ivuorinen/git-dirty/internal/render"
@@ -380,6 +382,283 @@ func TestUpdate_Quit(t *testing.T) {
 	}
 	if f.ctxs[0].Err() == nil {
 		t.Error("scan not canceled on quit")
+	}
+}
+
+// call is one action the fake runner was asked to run. The runner returns
+// what the test sends on answer, or the context's error.
+type call struct {
+	ctx    context.Context
+	path   string
+	kind   action.Kind
+	answer chan action.Result
+}
+
+// fakeRun stands in for action.Run.
+type fakeRun struct {
+	calls chan call
+}
+
+func (f *fakeRun) run(ctx context.Context, path string, k action.Kind) action.Result {
+	c := call{ctx: ctx, path: path, kind: k, answer: make(chan action.Result)}
+	f.calls <- c
+	select {
+	case r := <-c.answer:
+		return r
+	case <-ctx.Done():
+		return action.Result{Err: ctx.Err()}
+	}
+}
+
+// next returns the runner's next call.
+func (f *fakeRun) next(t *testing.T) call {
+	t.Helper()
+	select {
+	case c := <-f.calls:
+		return c
+	case <-time.After(2 * time.Second):
+		t.Fatal("the runner was not called")
+	}
+
+	return call{}
+}
+
+// none fails the test if the runner is called.
+func (f *fakeRun) none(t *testing.T) {
+	t.Helper()
+	select {
+	case c := <-f.calls:
+		t.Fatalf("the runner was called: %s %s", c.kind, c.path)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// actionItems is results() plus a repository that can be pulled.
+func actionItems() []scan.Item {
+	h, _ := gitrepo.SHA1.ParseHex("1111111111111111111111111111111111111111")
+
+	return append(results(), repo("tracked", gitstat.Result{
+		Head:     gitstat.Head{Branch: mainBranch, Label: mainBranch, Hash: h},
+		Upstream: &gitstat.Tracking{Ref: "origin/" + mainBranch},
+	}))
+}
+
+// newActionModel returns a model with a finished scan of actionItems and
+// a fake runner.
+func newActionModel(t *testing.T) (*Model, *feeder, *fakeRun) {
+	t.Helper()
+
+	return newRunModel(t, actionItems())
+}
+
+// newRunModel returns a model with a finished scan of items and a fake
+// runner.
+func newRunModel(t *testing.T, items []scan.Item) (*Model, *feeder, *fakeRun) {
+	t.Helper()
+	m, f := newTestModel(t)
+	fr := &fakeRun{calls: make(chan call, 4)}
+	m.cfg.Run = fr.run
+	m.Update(batchMsg{gen: m.gen, items: items, done: true})
+	close(f.feeds[0]) // a finished scan closes its channel
+	t.Cleanup(func() { m.quit() })
+
+	return m, f, fr
+}
+
+// actionResult runs the command an action key returned, which waits for
+// the runner, and returns the action's result message.
+func actionResult(t *testing.T, cmd tea.Cmd) actionMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("no command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("the command is not a batch")
+	}
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		if msg, ok := c().(actionMsg); ok {
+			return msg
+		}
+	}
+	t.Fatal("no action result in the batch")
+
+	return actionMsg{}
+}
+
+func TestAction_RunsOnTheSelectedRepository(t *testing.T) {
+	m, f, fr := newActionModel(t)
+	selectRepo(t, m, "clean")
+	cmd := press(m, "f")
+	c := fr.next(t)
+	if want := filepath.Join(root, "clean"); c.path != want || c.kind != action.Fetch {
+		t.Fatalf("runner called with %s %s, want fetch %s", c.kind, c.path, want)
+	}
+	if !strings.Contains(m.status(), "fetch "+filepath.Join(root, "clean")+"…") {
+		t.Errorf("status while running = %q", m.status())
+	}
+	c.answer <- action.Result{}
+	m.Update(actionResult(t, cmd))
+	if len(f.ctxs) != 2 {
+		t.Errorf("scans started = %d, want 2: a finished action rescans", len(f.ctxs))
+	}
+	if !strings.Contains(m.status(), "fetch "+filepath.Join(root, "clean")+": ok") {
+		t.Errorf("status after the action = %q", m.status())
+	}
+}
+
+func TestAction_RefusedWithTheReason(t *testing.T) {
+	m, _, fr := newActionModel(t)
+	press(m, "f") // the cursor is on the root directory
+	if !strings.Contains(m.status(), "fetch: not a repository") {
+		t.Errorf("status = %q, want the directory refusal", m.status())
+	}
+	selectRepo(t, m, "clean")
+	press(m, "p")
+	if !strings.Contains(m.status(), "pull: no upstream") {
+		t.Errorf("status = %q, want the no-upstream refusal", m.status())
+	}
+	fr.none(t)
+}
+
+func TestAction_ConfirmFirst(t *testing.T) {
+	m, _, fr := newActionModel(t)
+	selectRepo(t, m, "tracked")
+	press(m, "P")
+	fr.none(t)
+	if m.confirm == nil {
+		t.Fatal("P did not open the confirm page")
+	}
+	if v := m.View().Content; !strings.Contains(v, "pull --rebase=true") ||
+		!strings.Contains(v, filepath.Join(root, "tracked")) {
+		t.Errorf("confirm page lacks the command or the path:\n%s", v)
+	}
+	press(m, "n")
+	fr.none(t)
+	if m.confirm != nil {
+		t.Fatal("n left the confirm page open")
+	}
+	press(m, "P")
+	press(m, "y")
+	if c := fr.next(t); c.kind != action.PullRebase || c.path != filepath.Join(root, "tracked") {
+		t.Errorf("runner called with %s %s, want pull --rebase on tracked", c.kind, c.path)
+	}
+}
+
+func TestAction_RefusedWhileOneRuns(t *testing.T) {
+	m, f, fr := newActionModel(t)
+	selectRepo(t, m, "clean")
+	press(m, "f")
+	fr.next(t) // left unanswered: the action keeps running
+	selectRepo(t, m, "tracked")
+	press(m, "p")
+	if !strings.Contains(m.status(), "pull: an action is running") {
+		t.Errorf("status = %q, want the busy refusal", m.status())
+	}
+	press(m, "F")
+	if m.confirm != nil {
+		t.Error("F opened a confirm page while an action runs")
+	}
+	press(m, "r")
+	if len(f.ctxs) != 1 {
+		t.Errorf("r started a scan while an action runs")
+	}
+	fr.none(t)
+}
+
+func TestAction_RefusedWhileScanning(t *testing.T) {
+	m, _, fr := newActionModel(t)
+	selectRepo(t, m, "clean")
+	press(m, "r")
+	press(m, "f")
+	if !strings.Contains(m.status(), "fetch: wait for the scan to finish") {
+		t.Errorf("status = %q, want the scanning refusal", m.status())
+	}
+	fr.none(t)
+}
+
+func TestAction_OutputIsSanitized(t *testing.T) {
+	m, _, fr := newActionModel(t)
+	selectRepo(t, m, "clean")
+	cmd := press(m, "f")
+	fr.next(t).answer <- action.Result{Err: errors.New("exit status 1"), Output: "remote: \x1b[31mdenied\n"}
+	m.Update(actionResult(t, cmd))
+	s := m.status()
+	if strings.Contains(s, "\x1b") || !strings.Contains(s, render.Sanitize("\x1b[31m")+"denied") {
+		t.Errorf("status = %q, want git's line with the escape escaped", s)
+	}
+}
+
+// isQuit reports whether cmd ends the program.
+func isQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+
+	return ok
+}
+
+// TestAction_QuitAsksFirst: q during an action asks, because quitting
+// interrupts git; y quits, cancels git and stop waits for the runner.
+func TestAction_QuitAsksFirst(t *testing.T) {
+	m, _, _ := newActionModel(t)
+	returned := make(chan struct{})
+	var seen context.Context
+	called := make(chan struct{})
+	m.cfg.Run = func(ctx context.Context, _ string, _ action.Kind) action.Result {
+		seen = ctx
+		close(called)
+		<-ctx.Done()
+		time.Sleep(50 * time.Millisecond) // git cleaning up after SIGINT
+		close(returned)
+
+		return action.Result{Err: ctx.Err()}
+	}
+	selectRepo(t, m, "clean")
+	press(m, "f")
+	<-called
+	if isQuit(press(m, "q")) {
+		t.Fatal("q quit at once while an action runs")
+	}
+	if !strings.Contains(m.status(), "Quit and interrupt git?") {
+		t.Errorf("status = %q, want the quit question", m.status())
+	}
+	press(m, "n")
+	if m.askQuit || seen.Err() != nil {
+		t.Fatal("n did not keep the action running")
+	}
+	press(m, "q")
+	if !isQuit(press(m, "y")) {
+		t.Fatal("y did not quit")
+	}
+	stopped := make(chan struct{})
+	go func() { m.stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop did not return")
+	}
+	select {
+	case <-returned:
+	default:
+		t.Error("stop returned before the runner did")
+	}
+}
+
+func TestAction_CtrlCQuitsAtOnce(t *testing.T) {
+	m, _, fr := newActionModel(t)
+	selectRepo(t, m, "clean")
+	press(m, "f")
+	c := fr.next(t)
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}); !isQuit(cmd) {
+		t.Fatal("ctrl+c did not quit during an action")
+	}
+	if c.ctx.Err() == nil {
+		t.Error("ctrl+c did not cancel the action")
 	}
 }
 

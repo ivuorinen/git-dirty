@@ -25,10 +25,11 @@ checked-out branch has diverged from the default branch.
 ```
 
 It is a single static binary. It reads git's on-disk formats itself (config,
-refs, the index, loose objects and packs, in SHA-1 and SHA-256 repositories)
-and never runs `git`, hooks, filters or `core.fsmonitor`. It makes no network
-requests: ahead/behind counts are measured against the remote-tracking refs as
-of your last fetch.
+refs, the index, loose objects and packs, in SHA-1 and SHA-256 repositories),
+and the scan never runs `git`, hooks, filters or `core.fsmonitor`. The scan
+makes no network requests: ahead/behind counts are measured against the
+remote-tracking refs as of your last fetch. The browser's fetch and pull keys
+are the exception: they run `git` in the selected repository ([Actions](#actions)).
 
 On a terminal it opens an interactive browser. When its output is piped, or
 with `--plain`, it prints the report.
@@ -111,10 +112,45 @@ in the main-branch list that exists locally.
 | `d` | Show only dirty or failed repositories |
 | `b` | Toggle branch names |
 | `r` | Rescan |
+| `f` | `git fetch --all` in the selected repository |
+| `F` | `git fetch --all --prune` in the selected repository, after y/n |
+| `p` | `git pull --ff-only --autostash` in the selected repository |
+| `P` | `git pull --rebase=true` in the selected repository, after y/n |
 | `?` | Full help |
-| `q`/`ctrl+c` | Quit |
+| `q` | Quit; asks first while an action runs |
+| `ctrl+c` | Quit at once |
 
-The browser is read-only: it never changes a repository.
+### Actions
+
+`f`, `F`, `p` and `P` run `git` in the repository under the cursor. The
+uppercase key is the destructive variant of the lowercase one and asks first.
+
+| Key | Runs | Runs on |
+| --- | --- | --- |
+| `f` | `git fetch --all` | A repository, a worktree or a bare repository |
+| `F` | `git fetch --all --prune`: also deletes remote-tracking branches the remote no longer has | The same |
+| `p` | `git pull --ff-only --autostash`: fast-forwards only, stashing uncommitted changes and reapplying them | A working tree on a branch with an upstream that exists |
+| `P` | `git pull --rebase=true`: rebases the branch's own commits onto the upstream | The same |
+
+- One action runs at a time, never during a scan, and a rescan follows each
+  one. The status line shows `ok` or git's last line. On any other line, the
+  status line says why nothing ran, such as `pull: HEAD is detached`.
+- git runs in the repository's directory, with no terminal, stdin on the null
+  device, `GIT_TERMINAL_PROMPT=0`, and without git's repository-local
+  variables (`GIT_DIR`, `GIT_WORK_TREE` and the others
+  `git rev-parse --local-env-vars` lists). Nothing can be typed: a remote
+  needs ssh-agent or a credential helper. A key passphrase, an unknown host
+  key or a password prompt makes the action fail with git's message.
+- It is git, run as you would run it in that directory: the repository's
+  hooks, `core.fsmonitor`, `core.sshCommand` and credential helpers run, and
+  `safe.directory` and `safe.bareRepository` apply. Run actions only in
+  repositories you trust.
+- `p` on a branch that has diverged from its upstream fails and changes
+  nothing. `P` with uncommitted changes fails unless `rebase.autoStash` is
+  set. An autostash that conflicts when it is reapplied leaves the changes in
+  `git stash list`.
+- `q` asks first while an action runs, because quitting interrupts git: an
+  interrupted `P` can leave a rebase in progress (`git rebase --abort`).
 
 ## Configuration
 
@@ -197,8 +233,8 @@ Ignore rules follow git's: `core.excludesFile` (default
 
 - Content filters such as `core.autocrlf` and Git LFS are not applied. A file
   whose timestamp changed without a content change can show as `M` until
-  `git status` refreshes the index. The tool is read-only, so it cannot
-  refresh the index itself.
+  `git status` refreshes the index. The scan does not write to repositories,
+  so it cannot refresh the index itself.
 - Files marked `git update-index --assume-unchanged` are still checked.
 - Split-index and SHA-256 repositories are supported. A sparse index is not,
   and is shown as `! index: unsupported index extension "sdir"`; neither are
@@ -217,9 +253,10 @@ Ignore rules follow git's: `core.excludesFile` (default
   is listed as bare (🪵) when the scan reaches it, and its working tree is
   listed on its own: the git directory does not record where its working
   tree is, so the two cannot be joined.
-- `safe.bareRepository` is not read. git uses it to refuse bare repositories
-  found inside other folders, because git runs configuration and hooks from a
-  repository; git-dirty runs nothing, and lists every bare repository it finds.
+- `safe.bareRepository` is not read by the scan. git uses it to refuse bare
+  repositories found inside other folders, because git runs configuration and
+  hooks from a repository; the scan runs nothing, and lists every bare
+  repository it finds. The fetch keys run git, which applies it.
 - 🪵 (U+1FAB5) is a Unicode 13 emoji. A terminal whose emoji font predates it
   prints a box in its place.
 
