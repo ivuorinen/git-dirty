@@ -154,8 +154,8 @@ func (d *ewahDecoder) add(p int) error {
 
 // applySplitIndex merges idx (the split part) onto its shared index, as git's
 // merge_base_index does: drop deleted shared entries, substitute replaced
-// ones (a replacement with an empty name keeps the shared entry's name),
-// then add the remaining split entries and sort.
+// ones (each with an empty name, keeping the shared entry's), then add the
+// remaining split entries and sort.
 func (r *Repository) applySplitIndex(idx *Index) error {
 	link := idx.link
 	idx.link = nil
@@ -166,7 +166,9 @@ func (r *Repository) applySplitIndex(idx *Index) error {
 	if err := link.check(len(shared.Entries), len(idx.Entries)); err != nil {
 		return err
 	}
-	idx.Entries = mergeSplitIndex(shared.Entries, idx.Entries, link)
+	if idx.Entries, err = mergeSplitIndex(shared.Entries, idx.Entries, link); err != nil {
+		return err
+	}
 	if idx.Tree == nil {
 		idx.Tree = shared.Tree
 	}
@@ -209,17 +211,19 @@ func (l *indexLink) check(sharedLen, splitLen int) error {
 }
 
 // mergeSplitIndex applies split onto base, as link describes, and returns
-// the entries sorted by name and stage. base is modified.
-func mergeSplitIndex(base, split []IndexEntry, link *indexLink) []IndexEntry {
+// the entries sorted by name and stage. base is modified. As in git, a
+// replacement must not carry a name.
+func mergeSplitIndex(base, split []IndexEntry, link *indexLink) ([]IndexEntry, error) {
 	deleted := make(map[int]bool, len(link.deleted))
 	for _, p := range link.deleted {
 		deleted[p] = true
 	}
 	for i, p := range link.replaced {
 		e := split[i]
-		if e.Name == "" {
-			e.Name = base[p].Name
+		if e.Name != "" {
+			return nil, fmt.Errorf("split index: the replacement of entry %d has a name", p)
 		}
+		e.Name = base[p].Name
 		base[p] = e
 	}
 	type key struct {
@@ -243,5 +247,5 @@ func mergeSplitIndex(base, split []IndexEntry, link *indexLink) []IndexEntry {
 		return cmp.Or(strings.Compare(a.Name, b.Name), cmp.Compare(a.Stage, b.Stage))
 	})
 
-	return entries
+	return entries, nil
 }
