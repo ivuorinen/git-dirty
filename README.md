@@ -147,10 +147,11 @@ uppercase key is the destructive variant of the lowercase one and asks first.
   hooks, `core.fsmonitor`, `core.sshCommand` and credential helpers run, and
   `safe.directory` and `safe.bareRepository` apply. Run actions only in
   repositories you trust.
-- `p` on a branch that has diverged from its upstream fails and changes
-  nothing. `P` with uncommitted changes fails unless `rebase.autoStash` is
-  set. An autostash that conflicts when it is reapplied leaves the changes in
-  `git stash list`.
+- `p` on a branch that has diverged from its upstream fails, and the branch
+  and working tree stay as they were; its fetch can still update
+  remote-tracking branches and `FETCH_HEAD`. `P` with uncommitted changes
+  fails unless `rebase.autoStash` is set. An autostash that conflicts when it
+  is reapplied leaves the changes in `git stash list`.
 - `q` asks first while an action runs, because quitting interrupts git: an
   interrupted `P` can leave a rebase in progress (`git rebase --abort`).
 
