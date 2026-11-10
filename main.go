@@ -148,16 +148,10 @@ type session struct {
 // environment and the command line on top, then the same checks as at
 // startup.
 func (s session) tuiConfig(file config.Config) (tui.Config, error) {
-	cfg, err := config.ApplyEnv(file)
+	cfg, err := s.overlay(file)
 	if err != nil {
 		return tui.Config{}, err
 	}
-	opts, err := parseArgs(s.args, cfg)
-	if err != nil {
-		return tui.Config{}, err
-	}
-	effective := opts.cfg
-	cfg = opts.cfg
 	if err := cfg.Normalize(); err != nil {
 		return tui.Config{}, err
 	}
@@ -173,9 +167,36 @@ func (s session) tuiConfig(file config.Config) (tui.Config, error) {
 		Color:       cfg.Color,
 		ConfigPath:  s.path,
 		File:        file,
-		Effective:   effective,
-		Reconfigure: s.tuiConfig,
+		Overlay:     s.overlay,
+		Reconfigure: s.reconfigure,
 	}, nil
+}
+
+// reconfigure checks an edited file layer's own values before applying it:
+// with -m 4, a saved maxDepth of 0 would pass here and stop the next run
+// that has no flag. Whether its directory exists is not checked: a file's
+// dir, such as the default ~/Code, need not exist for someone who always
+// names a directory. Startup calls tuiConfig directly, so a bad value that
+// a flag overrides still runs as before.
+func (s session) reconfigure(file config.Config) (tui.Config, error) {
+	check := file
+	if err := check.Normalize(); err != nil {
+		return tui.Config{}, err
+	}
+
+	return s.tuiConfig(file)
+}
+
+// overlay applies the environment and the command line to the config file's
+// layer, before ~ in the directory is expanded.
+func (s session) overlay(file config.Config) (config.Config, error) {
+	cfg, err := config.ApplyEnv(file)
+	if err != nil {
+		return cfg, err
+	}
+	opts, err := parseArgs(s.args, cfg)
+
+	return opts.cfg, err
 }
 
 // runTUI shows the interactive browser until the user quits or a signal

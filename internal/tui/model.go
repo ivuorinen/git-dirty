@@ -55,13 +55,13 @@ type Config struct {
 
 	// The settings page. ConfigPath is the config file in use. File is its
 	// layer: the defaults and the file, without the environment or flags.
-	// Effective is the settings with both applied, before ~ is expanded,
-	// to show which rows they override. Reconfigure rebuilds the Config from
-	// an edited file layer as main does at startup; nil leaves the page
-	// unavailable. Save writes the file layer; nil means config.Save.
+	// Overlay applies both to a file layer, before ~ is expanded, to show
+	// which rows they override. Reconfigure rebuilds the Config from an
+	// edited file layer as main does at startup. With either nil the page
+	// is unavailable. Save writes the file layer; nil means config.Save.
 	ConfigPath  string
 	File        config.Config
-	Effective   config.Config
+	Overlay     func(config.Config) (config.Config, error)
 	Reconfigure func(config.Config) (Config, error)
 	Save        func(string, config.Config) error
 }

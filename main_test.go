@@ -25,6 +25,8 @@ const (
 	flagDepth  = "-d"
 	flagHelp   = "-h"
 	flagConfig = "-config"
+
+	flagMaxDepth = "-m"
 )
 
 // isolateEnv clears every setting git-dirty and git read from the
@@ -343,7 +345,7 @@ func TestSession_TUIConfig(t *testing.T) {
 	file := config.Defaults()
 	file.Dir = t.TempDir()
 	file.MaxDepth = 9
-	s := session{args: []string{"-m", "4"}, path: "/x/config.json"}
+	s := session{args: []string{flagMaxDepth, "4"}, path: "/x/config.json"}
 	tc, err := s.tuiConfig(file)
 	if err != nil {
 		t.Fatal(err)
@@ -351,9 +353,13 @@ func TestSession_TUIConfig(t *testing.T) {
 	if tc.Scan.MaxDepth != 4 {
 		t.Errorf("maxDepth = %d, want the flag's 4 over the file's 9", tc.Scan.MaxDepth)
 	}
-	if !tc.Effective.CheckStash || tc.File.CheckStash {
+	eff, err := tc.Overlay(tc.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.CheckStash || tc.File.CheckStash {
 		t.Errorf("checkStash: effective %v, file %v; want the environment's true over the file's false",
-			tc.Effective.CheckStash, tc.File.CheckStash)
+			eff.CheckStash, tc.File.CheckStash)
 	}
 	if tc.ConfigPath != s.path || tc.Reconfigure == nil {
 		t.Error("the config path or Reconfigure is not carried")
@@ -361,6 +367,29 @@ func TestSession_TUIConfig(t *testing.T) {
 	file.Dir = filepath.Join(file.Dir, "missing")
 	if _, err := s.tuiConfig(file); err == nil || !strings.Contains(err.Error(), "no such file") {
 		t.Errorf("a missing dir: err = %v", err)
+	}
+}
+
+// TestSession_ReconfigureChecksTheFileLayer: a flag does not hide an invalid
+// value from a save, but startup with the same flag still runs, and a file
+// dir that a directory argument replaces need not exist.
+func TestSession_ReconfigureChecksTheFileLayer(t *testing.T) {
+	isolateEnv(t)
+	file := config.Defaults()
+	file.Dir = t.TempDir()
+	file.MaxDepth = 0
+	s := session{args: []string{flagMaxDepth, "4"}}
+	tc, err := s.tuiConfig(file)
+	if err != nil {
+		t.Fatalf("startup with -m 4 over maxDepth 0: %v", err)
+	}
+	if _, err := tc.Reconfigure(file); err == nil || !strings.Contains(err.Error(), "maxDepth") {
+		t.Errorf("saving maxDepth 0 under -m 4: err = %v, want a maxDepth error", err)
+	}
+	file.MaxDepth = 9
+	file.Dir = filepath.Join(file.Dir, "missing")
+	if _, err := (session{args: []string{t.TempDir()}}).reconfigure(file); err != nil {
+		t.Errorf("a missing file dir under a directory argument: %v", err)
 	}
 }
 
@@ -382,7 +411,7 @@ func TestRunExitCodes(t *testing.T) {
 		{[]string{flagConfig}, exitUsage, "", "flag needs an argument"},
 		{[]string{flagHelp}, exitOK, "Usage: git-dirty", ""},
 		{[]string{"--version"}, exitOK, "dev", ""},
-		{[]string{"-m", "0", t.TempDir()}, exitError, "", "maxDepth"},
+		{[]string{flagMaxDepth, "0", t.TempDir()}, exitError, "", "maxDepth"},
 		{[]string{flagPlain, filepath.Join(t.TempDir(), "missing")}, exitError, "", "no such file"},
 		{[]string{flagPlain, file}, exitError, "", "not a directory"},
 	}

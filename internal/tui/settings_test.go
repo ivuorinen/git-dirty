@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,7 +27,7 @@ func (f *fakeSettings) reconfigure(file config.Config) (Config, error) {
 		return Config{}, f.err
 	}
 
-	return Config{Root: root, Scan: scan.Options{Root: root, MaxDepth: file.MaxDepth}, Effective: file}, nil
+	return Config{Root: root, Scan: scan.Options{Root: root, MaxDepth: file.MaxDepth}}, nil
 }
 
 func (f *fakeSettings) save(_ string, file config.Config) error {
@@ -44,8 +45,11 @@ func newSettingsModel(t *testing.T) (*Model, *feeder, *fakeSettings) {
 	fs := &fakeSettings{}
 	m.cfg.ConfigPath = testConfigPath
 	m.cfg.File = config.Defaults()
-	m.cfg.Effective = config.Defaults()
-	m.cfg.Effective.CheckStash = true
+	m.cfg.Overlay = func(c config.Config) (config.Config, error) {
+		c.CheckStash = true
+
+		return c, nil
+	}
 	m.cfg.Reconfigure = fs.reconfigure
 	m.cfg.Save = fs.save
 
@@ -138,6 +142,30 @@ func TestSettings_SavesWithConfigSave(t *testing.T) {
 	}
 }
 
+func TestSettings_KeepsWhitespaceInDir(t *testing.T) {
+	m, _, fs := newSettingsModel(t)
+	press(m, "s")
+	editRow(t, m, "dir", "/src/old ")
+	pressSave(m)
+	if len(fs.saved) != 1 || fs.saved[0].Dir != "/src/old " {
+		t.Errorf("saved %+v, want dir %q exactly", fs.saved, "/src/old ")
+	}
+}
+
+// TestSettings_UntouchedListKeepsItsEntries: the form shows a list comma
+// separated, so re-parsing an unedited row would split an entry with a comma.
+func TestSettings_UntouchedListKeepsItsEntries(t *testing.T) {
+	m, _, fs := newSettingsModel(t)
+	want := []string{"archive,old", "tmp"}
+	m.cfg.File.Exclude = slices.Clone(want)
+	press(m, "s")
+	editRow(t, m, "maxDepth", "9")
+	pressSave(m)
+	if len(fs.saved) != 1 || !slices.Equal(fs.saved[0].Exclude, want) {
+		t.Errorf("saved %+v, want exclude %q untouched", fs.saved, want)
+	}
+}
+
 func TestSettings_ReconfigureErrorWritesNothing(t *testing.T) {
 	m, f, fs := newSettingsModel(t)
 	fs.err = errors.New("/missing: no such file or directory")
@@ -171,6 +199,50 @@ func TestSettings_Rows(t *testing.T) {
 	if strings.Count(v, "overridden:") != 1 {
 		t.Errorf("rows the environment does not change show overridden:\n%s", v)
 	}
+}
+
+// TestSettings_OverrideFollowsTheEditedValue: a variable equal to the file's
+// value shows nothing until the row is edited away from it.
+func TestSettings_OverrideFollowsTheEditedValue(t *testing.T) {
+	m, _, _ := newSettingsModel(t)
+	m.cfg.File.MaxDepth = 5
+	m.cfg.Overlay = func(c config.Config) (config.Config, error) {
+		c.MaxDepth = 5
+
+		return c, nil
+	}
+	press(m, "s")
+	if v := m.View().Content; strings.Contains(v, "overridden:") {
+		t.Errorf("an override equal to the file's value is shown:\n%s", v)
+	}
+	editRow(t, m, "maxDepth", "9")
+	if v := m.View().Content; !strings.Contains(v, "overridden: 5") {
+		t.Errorf("the edited row does not show the override:\n%s", v)
+	}
+}
+
+// TestSettings_FitsAShortWindow: 12 rows hold four settings; the selected
+// row, a failed save's reason and the keys stay on screen.
+func TestSettings_FitsAShortWindow(t *testing.T) {
+	m, _, _ := newSettingsModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+	press(m, "s")
+	fits := func() {
+		t.Helper()
+		if rows := strings.Count(m.View().Content, "\n") + 1; rows > 12 {
+			t.Errorf("the page is %d rows in a 12-row window", rows)
+		}
+	}
+	fits()
+	for range settingFields {
+		press(m, "j")
+	}
+	fits()
+	wantView(t, m, []string{"> verbose", "ctrl+s save"}, []string{"> dir"})
+	editRow(t, m, "depth", "x")
+	pressSave(m)
+	fits()
+	wantView(t, m, []string{"> depth", `depth: not a number: "x"`, "ctrl+s save"}, nil)
 }
 
 func TestSettings_TogglesAndDiscards(t *testing.T) {

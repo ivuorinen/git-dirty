@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -44,7 +45,7 @@ func textSetting(k string, p func(*config.Config) *string) settingField {
 		key: k,
 		get: func(c config.Config) string { return *p(&c) },
 		set: func(c *config.Config, s string) error {
-			*p(c) = strings.TrimSpace(s)
+			*p(c) = s // exactly as given: a path may end in a space
 
 			return nil
 		},
@@ -136,7 +137,7 @@ func (m *Model) requestSettings() {
 		m.message = "settings: an action is running"
 
 		return
-	case m.cfg.Reconfigure == nil:
+	case m.cfg.Reconfigure == nil || m.cfg.Overlay == nil:
 		m.message = "settings: not available"
 
 		return
@@ -216,13 +217,11 @@ func (m *Model) settingsEditKey(msg tea.KeyPressMsg) tea.Cmd {
 // a settings error writes nothing, and a failed write changes nothing.
 func (m *Model) saveSettings() tea.Cmd {
 	p := m.settings
-	file := m.cfg.File
-	for i, f := range settingFields {
-		if err := f.set(&file, p.values[i]); err != nil {
-			p.err = err.Error()
+	file, err := m.editedFile()
+	if err != nil {
+		p.err = err.Error()
 
-			return nil
-		}
+		return nil
 	}
 	next, err := m.cfg.Reconfigure(file)
 	if err != nil {
@@ -241,7 +240,7 @@ func (m *Model) saveSettings() tea.Cmd {
 	}
 	next.ConfigPath, next.File = m.cfg.ConfigPath, file
 	next.Start, next.Run, next.Now = m.cfg.Start, m.cfg.Run, m.cfg.Now
-	next.Reconfigure, next.Save = m.cfg.Reconfigure, m.cfg.Save
+	next.Overlay, next.Reconfigure, next.Save = m.cfg.Overlay, m.cfg.Reconfigure, m.cfg.Save
 	m.cfg = next
 	m.applyColor()
 	m.settings = nil
@@ -250,11 +249,46 @@ func (m *Model) saveSettings() tea.Cmd {
 	return tea.Batch(m.startScan(), m.spinner.Tick)
 }
 
+// editedFile returns the config file's layer with the rows as edited, and
+// the first error from a row that does not parse; such a row keeps the
+// file's value. An untouched row is not parsed: the list text cannot hold
+// an entry with a comma.
+func (m *Model) editedFile() (config.Config, error) {
+	p, file := m.settings, m.cfg.File
+	var first error
+	for i, f := range settingFields {
+		if p.values[i] == f.get(file) {
+			continue
+		}
+		if err := f.set(&file, p.values[i]); err != nil && first == nil {
+			first = err
+		}
+	}
+
+	return file, first
+}
+
+// overlaid returns edited with the environment and flags applied, or
+// edited itself if they cannot be applied. They are re-applied to the rows
+// as edited, not read from a snapshot, because a variable that equals the
+// file's value still overrides the value the row is edited to.
+func (m *Model) overlaid(edited config.Config) config.Config {
+	eff, err := m.cfg.Overlay(edited)
+	if err != nil {
+		return edited
+	}
+
+	return eff
+}
+
 // settingsView is the settings page. A row that the environment or a flag
 // overrides shows the value in effect.
 func (m *Model) settingsView() string {
 	p := m.settings
-	lines := []string{"", m.bold("Settings: " + render.Sanitize(m.cfg.ConfigPath)), ""}
+	edited, _ := m.editedFile()
+	eff := m.overlaid(edited)
+	head := []string{"", m.bold("Settings: " + render.Sanitize(m.cfg.ConfigPath)), ""}
+	rows := make([]string, 0, len(settingFields))
 	for i, f := range settingFields {
 		gutter := "  "
 		if i == p.cursor {
@@ -265,22 +299,28 @@ func (m *Model) settingsView() string {
 			value = render.Sanitize(string(p.buf)) + "█"
 		}
 		line := fmt.Sprintf("%s%-15s %s", gutter, f.key, value)
-		if eff := f.get(m.cfg.Effective); eff != f.get(m.cfg.File) {
-			line += "   overridden: " + render.Sanitize(eff)
+		if v := f.get(eff); v != f.get(edited) {
+			line += "   overridden: " + render.Sanitize(v)
 		}
-		lines = append(lines, line)
+		rows = append(rows, line)
 	}
+	var tail []string
 	if p.err != "" {
 		why := render.Sanitize(p.err)
 		if st, ok := m.styles[render.Error]; ok {
 			why = st.Render(why)
 		}
-		lines = append(lines, "", why)
+		tail = append(tail, "", why)
 	}
 	keys := "↑/↓ choose • enter edit or toggle • ctrl+s save • esc back"
 	if p.editing {
 		keys = "enter keep • esc cancel"
 	}
+	tail = append(tail, "", keys)
+	// The rows give way in a short window, so the selected row, the reason a
+	// save failed and the keys stay on screen. Three rows are outside the
+	// page: the title, the status and the empty help row.
+	room := max(1, m.height-3-len(head)-len(tail))
 
-	return strings.Join(append(lines, "", keys), "\n")
+	return strings.Join(slices.Concat(head, window(rows, room, p.cursor), tail), "\n")
 }
