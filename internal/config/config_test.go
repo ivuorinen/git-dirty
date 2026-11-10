@@ -14,6 +14,7 @@ const (
 	envMaxDepth = "GIT_DIRTY_MAXDEPTH"
 	envColor    = "GIT_DIRTY_COLOR"
 	envNoColor  = "NO_COLOR"
+	goosWindows = "windows"
 )
 
 var envNames = []string{
@@ -228,7 +229,7 @@ func TestSave_DefaultsWriteAnEmptyObject(t *testing.T) {
 }
 
 func TestSave_FollowsASymlink(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("symlinks need privileges on Windows")
 	}
 	dir := t.TempDir()
@@ -258,8 +259,52 @@ func TestSave_FollowsASymlink(t *testing.T) {
 	}
 }
 
+// TestSave_CreatesADanglingSymlinkTarget: a link whose target does not exist
+// yet, relative here, stays a link and the save creates the target.
+func TestSave_CreatesADanglingSymlinkTarget(t *testing.T) {
+	if runtime.GOOS == goosWindows {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "config.json")
+	if err := os.Symlink(filepath.Join("dotfiles", "git-dirty.json"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(link, nonDefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("config.json is no longer a symlink: %v", err)
+	}
+	got, err := LoadFile(filepath.Join(dir, "dotfiles", "git-dirty.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, nonDefaultConfig()) {
+		t.Errorf("the created target holds %+v", got)
+	}
+}
+
+// TestSave_SymlinkCycleFails: a cycle is an error, not an endless walk.
+func TestSave_SymlinkCycleFails(t *testing.T) {
+	if runtime.GOOS == goosWindows {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	if err := os.Symlink(b, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(a, nonDefaultConfig()); err == nil {
+		t.Error("Save through a symlink cycle succeeded")
+	}
+}
+
 func TestSave_KeepsTheMode(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("Windows has no Unix file modes")
 	}
 	path := filepath.Join(t.TempDir(), "config.json")

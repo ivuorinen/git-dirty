@@ -162,7 +162,10 @@ func jsonFields(cfg Config) (map[string]json.RawMessage, error) {
 }
 
 // resolve returns the file a save replaces: path, or the target of path
-// when it is a symlink.
+// when it is a symlink. The target need not exist: a dotfile manager can
+// link the config before the file is first written, which startup reads as
+// the defaults, and the save then creates it. A symlink cycle is an error
+// from EvalSymlinks, so the recursion ends.
 func resolve(path string) (string, error) {
 	fi, err := os.Lstat(path)
 	switch {
@@ -173,8 +176,19 @@ func resolve(path string) (string, error) {
 	case fi.Mode()&os.ModeSymlink == 0:
 		return path, nil
 	}
+	target, err := filepath.EvalSymlinks(path)
+	if !errors.Is(err, os.ErrNotExist) {
+		return target, err
+	}
+	link, err := os.Readlink(path)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(link) {
+		link = filepath.Join(filepath.Dir(path), link)
+	}
 
-	return filepath.EvalSymlinks(path)
+	return resolve(link)
 }
 
 // replace writes data to a temporary file in target's directory and renames
