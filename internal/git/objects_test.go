@@ -144,6 +144,9 @@ func TestParseObjects_Errors(t *testing.T) {
 		"bad tree id":       "tree xyz\ncommitter C <c@x> 1 +0000\n\nm",
 		"bad timestamp":     "tree " + id + "\ncommitter C <c@x> soon +0000\n\nm",
 		"duplicate tree":    "tree " + id + "\ntree " + id + "\ncommitter C <c@x> 1 +0000\n\nm",
+		"bad parent":        "tree " + id + "\nparent xyz\ncommitter C <c@x> 1 +0000\n\nm",
+		"no email bracket":  "tree " + id + "\ncommitter C 1 +0000\n\nm",
+		"no timestamp":      "tree " + id + "\ncommitter C <c@x>\n\nm",
 	}
 	for name, c := range commits {
 		if _, err := ParseCommit([]byte(c), SHA1); err == nil {
@@ -161,7 +164,15 @@ func TestParseObjects_Errors(t *testing.T) {
 			t.Errorf("tree %s: want error", name)
 		}
 	}
-	if _, err := ParseTag([]byte("type commit\n\nmsg"), SHA1); err == nil {
-		t.Error("tag without object: want error")
+	tags := map[string]string{
+		"no object":    "type commit\n\nmsg",
+		"no type":      "object " + id + "\n\nmsg",
+		"bad object":   "object xyz\ntype commit\n\nmsg",
+		"unknown type": "object " + id + "\ntype nonsense\n\nmsg",
+	}
+	for name, tag := range tags {
+		if _, err := ParseTag([]byte(tag), SHA1); err == nil {
+			t.Errorf("tag %s: want error", name)
+		}
 	}
 }

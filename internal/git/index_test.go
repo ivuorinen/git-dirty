@@ -18,7 +18,7 @@ func indexFixture(t *testing.T, f Format) string {
 	writeFile(t, dir, "dir/b.txt", "b\n")
 	writeFile(t, dir, "dir/sub/c.txt", "c\n")
 	writeFile(t, dir, "exec.sh", "#!/bin/sh\n")
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != goosWindows {
 		//nolint:gosec // G302: the fixture needs the executable bit, so git records mode 100755
 		if err := os.Chmod(filepath.Join(dir, "exec.sh"), 0o755); err != nil {
 			t.Fatal(err)

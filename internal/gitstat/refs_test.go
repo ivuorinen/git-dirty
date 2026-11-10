@@ -139,6 +139,110 @@ func testDefaultBranch(t *testing.T) {
 	})
 }
 
+// onFeature is a clone with "feature" checked out and no upstream for it,
+// and origin/HEAD pointing at main.
+func onFeature(t *testing.T) string {
+	t.Helper()
+	_, _, clone := remoteAndClone(t)
+	git(t, clone, "switch", "-q", "-c", "feature")
+
+	return clone
+}
+
+func TestUpstream_Unmapped(t *testing.T) {
+	t.Run("a remote without a merge ref is no upstream", func(t *testing.T) {
+		dir := newRepo(t)
+		git(t, dir, "config", "branch.main.remote", "origin")
+		if _, code := gitCode(t, dir, "rev-parse", "@{u}"); code == 0 {
+			t.Fatal("fixture: git found an upstream")
+		}
+		if up, _ := trackingFor(t, dir); up != nil {
+			t.Errorf("upstream = %+v, want nil", up)
+		}
+	})
+
+	for name, fetch := range map[string]string{
+		"a malformed fetch refspec maps nothing": "no-colon",
+		"a fetch refspec for other branches":     "+refs/heads/other:refs/remotes/origin/other",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, clone := remoteAndClone(t)
+			git(t, clone, "config", "remote.origin.fetch", fetch)
+			if out, code := gitCode(t, clone, "rev-parse", "@{u}"); code == 0 {
+				t.Fatalf("fixture: git mapped the upstream: %s", out)
+			}
+			up, _ := trackingFor(t, clone)
+			if up == nil || !up.Gone || up.Ref != "" {
+				t.Errorf("upstream = %+v, want Gone with no ref", up)
+			}
+		})
+	}
+
+}
+
+func TestDefaultBranch_Corners(t *testing.T) { forEachFormat(t, testDefaultBranchCorners) }
+
+func testDefaultBranchCorners(t *testing.T) {
+	t.Helper()
+	for _, c := range []struct {
+		name          string
+		setup         func(t *testing.T) string
+		want          string // the default branch, "" for none
+		local, versus bool   // the comparisons it should have
+	}{
+		{"no candidate exists", func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			git(t, dir, "branch", "-m", "feature")
+
+			return dir
+		}, "", false, false},
+		{"origin/HEAD is not symbolic", func(t *testing.T) string {
+			t.Helper()
+			clone := onFeature(t)
+			git(t, clone, "update-ref", "--no-deref", "refs/remotes/origin/HEAD", "HEAD")
+
+			return clone
+		}, mainBranch, true, true},
+		{"origin/HEAD leads to another remote", func(t *testing.T) string {
+			t.Helper()
+			clone := onFeature(t)
+			git(t, clone, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/other/trunk")
+
+			return clone
+		}, mainBranch, true, true},
+		{"no local default branch", func(t *testing.T) string {
+			t.Helper()
+			clone := onFeature(t)
+			git(t, clone, "branch", "-q", "-D", mainBranch)
+
+			return clone
+		}, mainBranch, false, true},
+		{"the default branch exists nowhere", func(t *testing.T) string {
+			t.Helper()
+			clone := onFeature(t)
+			git(t, clone, "branch", "-q", "-D", mainBranch)
+			git(t, clone, "update-ref", "-d", "refs/remotes/origin/main")
+
+			return clone
+		}, mainBranch, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, def := trackingFor(t, c.setup(t))
+			if c.want == "" {
+				if def != nil {
+					t.Errorf("default = %+v, want nil", def)
+				}
+
+				return
+			}
+			if def == nil || def.Name != c.want || (def.Local != nil) != c.local || (def.Versus != nil) != c.versus {
+				t.Errorf("default = %+v, want %s, local %v, versus %v", def, c.want, c.local, c.versus)
+			}
+		})
+	}
+}
+
 func testDefaultBranchFromOriginHEAD(t *testing.T) {
 	_, seed, clone := remoteAndClone(t)
 	git(t, clone, "switch", "-q", "-c", "feature")

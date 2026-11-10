@@ -119,3 +119,39 @@ func TestUnreadableFixtureFailsInGit(t *testing.T) {
 		t.Error("git status succeeded on a corrupt index")
 	}
 }
+
+func TestKind_Words(t *testing.T) {
+	for _, c := range []struct {
+		k    Kind
+		verb string
+	}{
+		{Fetch, "fetch"}, {FetchPrune, "fetch"}, {Pull, "pull"}, {PullRebase, "pull"},
+	} {
+		if got := c.k.Verb(); got != c.verb {
+			t.Errorf("%s: Verb() = %q, want %q", c.k, got, c.verb)
+		}
+		if c.k.Warning() == "" {
+			t.Errorf("%s: no warning", c.k)
+		}
+		if c.k.String() == "" {
+			t.Errorf("Kind(%d): no command line", int(c.k))
+		}
+	}
+	unknown := Kind(99)
+	if unknown.String() != "" || unknown.Warning() != "" || unknown.Asks() {
+		t.Errorf("an unknown Kind describes something: %q, %q, %v", unknown, unknown.Warning(), unknown.Asks())
+	}
+}
+
+func TestLastLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                              "",
+		"one\n":                         "one",
+		"one\ntwo\n  \n":                "two",
+		"remote: 10%\rremote: 100%\r\n": "remote: 100%",
+	} {
+		if got := (Result{Output: in}).LastLine(); got != want {
+			t.Errorf("LastLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

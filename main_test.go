@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/ivuorinen/git-dirty/internal/config"
+	"github.com/ivuorinen/git-dirty/internal/gitstat"
 	"github.com/ivuorinen/git-dirty/internal/scan"
 )
 
@@ -432,5 +434,189 @@ func TestRunExitCodes(t *testing.T) {
 		if !strings.Contains(errOut.String(), tt.wantStderr) {
 			t.Errorf("run(%q) stderr = %q, want %q", tt.args, errOut.String(), tt.wantStderr)
 		}
+	}
+}
+
+// failingWriter accepts nothing.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestRun_MalformedConfigFile(t *testing.T) {
+	isolateEnv(t)
+	bad := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(bad, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	code := run(context.Background(), []string{flagConfig, bad}, nil, &bytes.Buffer{}, &errOut)
+	if code != exitError || !strings.Contains(errOut.String(), bad) {
+		t.Errorf("code %d, stderr %q, want the error naming the file", code, errOut.String())
+	}
+}
+
+func TestRun_MalformedGlobalGitConfig(t *testing.T) {
+	home := isolateEnv(t)
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[bad\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	code := run(context.Background(), []string{flagPlain, t.TempDir()}, nil, &bytes.Buffer{}, &errOut)
+	if code != exitError || !strings.Contains(errOut.String(), "git ignore configuration") {
+		t.Errorf("code %d, stderr %q, want the git configuration error", code, errOut.String())
+	}
+}
+
+func TestRun_NoWayToFindTheConfigFile(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if h, err := os.UserHomeDir(); err == nil {
+		t.Skipf("this platform has a home without HOME: %s", h)
+	}
+	if code := run(context.Background(), []string{flagHelp}, nil, &bytes.Buffer{}, &bytes.Buffer{}); code != exitError {
+		t.Errorf("code %d, want %d", code, exitError)
+	}
+}
+
+func TestRun_ReportCannotBeWritten(t *testing.T) {
+	isolateEnv(t)
+	var errOut bytes.Buffer
+	code := run(context.Background(), []string{flagPlain, t.TempDir()}, nil, failingWriter{}, &errOut)
+	if code != exitError || !strings.Contains(errOut.String(), "disk full") {
+		t.Errorf("code %d, stderr %q, want the write error", code, errOut.String())
+	}
+}
+
+func TestRunTUI_FailsBeforeTheBrowser(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	bad, good := filepath.Join(dir, "bad.json"), filepath.Join(dir, "good.json")
+	for name, body := range map[string]string{bad: "{", good: "{}"} {
+		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, s := range map[string]session{
+		"malformed config file":   {path: bad},
+		"bad flag at reconfigure": {path: good, args: []string{flagDepth, "x"}},
+		"root is missing":         {path: good, args: []string{filepath.Join(dir, "missing")}},
+		"bad value":               {path: good, args: []string{flagMaxDepth, "0"}},
+	} {
+		var errOut bytes.Buffer
+		if code := runTUI(context.Background(), s, nil, &bytes.Buffer{}, &errOut); code != exitError {
+			t.Errorf("%s: code %d, want %d", name, code, exitError)
+		}
+		if errOut.Len() == 0 {
+			t.Errorf("%s: nothing on stderr", name)
+		}
+	}
+}
+
+func TestSession_Overlay_BadEnvironment(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("GIT_DIRTY_DEPTH", "x")
+	if _, err := (session{}).overlay(config.Defaults()); err == nil {
+		t.Error("a bad variable: want error")
+	}
+}
+
+func TestCheckDir_Unreadable(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkDir(filepath.Join(file, "below")); err == nil {
+		t.Error("a path below a file: want error")
+	}
+}
+
+func TestProgress_Report(t *testing.T) {
+	failed := scan.Item{Kind: scan.Repo, Path: "bad", Result: gitstat.Result{Err: errors.New("index: broken")}}
+	warning := scan.Item{Kind: scan.Warning, Path: "skipped", Message: "skipped: excluded name"}
+	clean := scan.Item{Kind: scan.Repo, Path: "ok"}
+	const erase = "\r\x1b[K"
+	for _, c := range []struct {
+		name             string
+		verbose, counter bool
+		it               scan.Item
+		want             string
+	}{
+		{"a warning, quiet", false, false, warning, ""},
+		{"a warning, verbose", true, false, warning, "git-dirty: skipped: skipped: excluded name\n"},
+		{"a warning clears the counter", true, true, warning, erase + "git-dirty: skipped: skipped: excluded name\n"},
+		{"a failed repository, quiet", false, false, failed, ""},
+		{"a failed repository, verbose", true, false, failed, "git-dirty: bad: index: broken\n"},
+		{"a clean repository, verbose", true, false, clean, ""},
+	} {
+		var b bytes.Buffer
+		p := progress{w: &b, verbose: c.verbose, counter: c.counter}
+		p.report(c.it)
+		if b.String() != c.want {
+			t.Errorf("%s: %q, want %q", c.name, b.String(), c.want)
+		}
+	}
+}
+
+func TestIsTerminal(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }() // read back by no one
+	if isTerminal(&bytes.Buffer{}) || isTerminal(file) {
+		t.Error("a buffer or a regular file counted as a terminal")
+	}
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Skip(err)
+	}
+	defer func() { _ = null.Close() }() // read-only
+	if !isTerminal(null) {
+		t.Errorf("%s is a character device", os.DevNull)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if isTerminal(file) {
+		t.Error("a closed file counted as a terminal")
+	}
+}
+
+func TestOnOff(t *testing.T) {
+	if onOff(true) != "on" || onOff(false) != "off" {
+		t.Errorf("onOff: %q, %q", onOff(true), onOff(false))
+	}
+}
+
+func TestRun_NoColorWritesNoEscapes(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("NO_COLOR", "1")
+	var out bytes.Buffer
+	if code := run(context.Background(), []string{flagPlain, t.TempDir()}, nil, &out, &bytes.Buffer{}); code != exitOK {
+		t.Fatalf("code %d", code)
+	}
+	if strings.Contains(out.String(), "\x1b[") {
+		t.Errorf("escape codes with NO_COLOR: %q", out.String())
+	}
+}
+
+// A signal before the browser has drawn anything still ends the run as one.
+func TestRunTUI_Canceled(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(file, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ex, err := gitstat.LoadExcludes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := session{path: file, args: []string{dir}, ex: ex}
+	if code := runTUI(ctx, s, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); code != exitSignal {
+		t.Errorf("code %d, want %d", code, exitSignal)
 	}
 }

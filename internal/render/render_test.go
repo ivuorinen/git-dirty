@@ -269,3 +269,74 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultSegments(t *testing.T) {
+	behind := &gitstat.Tracking{Behind: 1}
+	versus := &gitstat.Tracking{Ahead: 1, Behind: 2}
+	for _, c := range []struct {
+		name string
+		d    *gitstat.DefaultBranch
+		want string
+	}{
+		{"on the default branch", nil, ""},
+		{"local behind", &gitstat.DefaultBranch{Name: mainBranch, Local: behind}, " · main ↓1"},
+		{"local ahead", &gitstat.DefaultBranch{Name: mainBranch, Local: &gitstat.Tracking{Ahead: 2}}, " · main ↑2"},
+		{"local level", &gitstat.DefaultBranch{Name: mainBranch, Local: &gitstat.Tracking{}}, ""},
+		{"local gone", &gitstat.DefaultBranch{Name: mainBranch, Local: &gitstat.Tracking{Gone: true, Ahead: 3}}, ""},
+		{"versus", &gitstat.DefaultBranch{Name: mainBranch, Versus: versus}, " · vs main ↑1 ↓2"},
+		{"both", &gitstat.DefaultBranch{Name: mainBranch, Local: behind, Versus: versus}, " · main ↓1 · vs main ↑1 ↓2"},
+	} {
+		var got strings.Builder
+		for _, s := range defaultSegments(c.d) {
+			got.WriteString(s.Text)
+		}
+		if got.String() != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got.String(), c.want)
+		}
+	}
+}
+
+func TestSanitize_KeepsAReplacementCharacter(t *testing.T) {
+	if got := Sanitize("\uFFFD"); got != "\uFFFD" {
+		t.Errorf("Sanitize(U+FFFD) = %q; only an invalid byte is escaped", got)
+	}
+}
+
+func TestWriteSegments_EmptyTextGetsNoColor(t *testing.T) {
+	var b bytes.Buffer
+	if err := WriteSegments(&b, []Segment{{"", Dirty}}, true); err != nil {
+		t.Fatal(err)
+	}
+	if b.String() != "\n" {
+		t.Errorf("output = %q, want only the newline", b.String())
+	}
+}
+
+func TestSummary_Singular(t *testing.T) {
+	if got := Summary(1, 0); !strings.Contains(got, "1 git repository in") {
+		t.Errorf("Summary(1) = %q", got)
+	}
+}
+
+// failingWriter accepts left writes, then fails.
+type failingWriter struct{ left int }
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if w.left == 0 {
+		return 0, errors.New("disk full")
+	}
+	w.left--
+
+	return len(p), nil
+}
+
+func TestWritePlain_WriteErrors(t *testing.T) {
+	lines := fixture().Lines(tree.Filter{})
+	o := baseOptions()
+	header := len(Header(root, o))
+	for name, left := range map[string]int{"header": 0, "tree": header, "summary": header + len(lines)} {
+		if err := WritePlain(&failingWriter{left}, root, lines, 1, 0, o, false); err == nil {
+			t.Errorf("a failed write in the %s: want error", name)
+		}
+	}
+}

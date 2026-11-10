@@ -456,3 +456,113 @@ func TestNormalize(t *testing.T) {
 		})
 	}
 }
+
+func TestPath_FallsBackToHome(t *testing.T) {
+	home := isolate(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	got, err := Path()
+	if want := filepath.Join(home, ".config", "git-dirty", "config.json"); err != nil || got != want {
+		t.Errorf("Path() = %q, %v, want %q", got, err, want)
+	}
+}
+
+// noHome leaves no way to find the home directory, or skips where there is
+// one regardless.
+func noHome(t *testing.T) {
+	t.Helper()
+	isolate(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if h, err := os.UserHomeDir(); err == nil {
+		t.Skipf("this platform has a home without HOME: %s", h)
+	}
+}
+
+func TestPath_NoHome(t *testing.T) {
+	noHome(t)
+	if got, err := Path(); err == nil {
+		t.Errorf("Path() = %q, want an error", got)
+	}
+}
+
+func TestNormalize_NoHome(t *testing.T) {
+	noHome(t)
+	c := Defaults()
+	c.Dir = "~/code"
+	if err := c.Normalize(); err == nil || !strings.HasPrefix(err.Error(), "dir:") {
+		t.Errorf("err = %v, want a dir: error", err)
+	}
+}
+
+// A path below a regular file cannot be opened, and does not read as missing.
+func TestLoadFile_NotReadable(t *testing.T) {
+	if runtime.GOOS == goosWindows {
+		t.Skip("Windows reports a path below a file as missing")
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(filepath.Join(file, "config.json")); err == nil {
+		t.Error("a path below a file: want error, not the defaults")
+	}
+}
+
+func TestLoad_BadDepthEnv(t *testing.T) {
+	isolate(t)
+	t.Setenv("GIT_DIRTY_DEPTH", "x")
+	if _, err := Load(xdgFile(t)); err == nil || !strings.Contains(err.Error(), "GIT_DIRTY_DEPTH") {
+		t.Errorf("err = %v, want it to name the variable", err)
+	}
+}
+
+func TestSave_BelowAFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(filepath.Join(file, "config.json"), Defaults()); err == nil {
+		t.Error("want error")
+	}
+}
+
+// A dangling symlink with an absolute target is created at that target.
+func TestSave_AbsoluteDanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere", "config.json")
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip(err)
+	}
+	if err := Save(link, Defaults()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("target not created: %v", err)
+	}
+}
+
+// A directory that cannot be written to stops the save at either step: making
+// the config's folder, or writing the temporary file beside it.
+func TestSave_ReadOnlyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // G302: the point is a directory it cannot write to
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: a directory has to be searchable
+			t.Error(err)
+		}
+	})
+	if err := os.Mkdir(filepath.Join(dir, "probe"), 0o700); err == nil {
+		t.Skip("the mode does not stop this user")
+	}
+	if err := Save(filepath.Join(dir, "new", "config.json"), Defaults()); err == nil {
+		t.Error("the folder cannot be made: want error")
+	}
+	if err := Save(filepath.Join(dir, "config.json"), Defaults()); err == nil {
+		t.Error("the temporary file cannot be written: want error")
+	}
+}

@@ -41,6 +41,20 @@ func ourModified(t *testing.T, dir string) bool {
 	return got
 }
 
+// symlinkRepo returns a committed repository with the symlink "link" to
+// a.txt.
+func symlinkRepo(t *testing.T) string {
+	t.Helper()
+	dir := newRepo(t)
+	if err := os.Symlink("a.txt", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", "link")
+	git(t, dir, "commit", "-q", "-m", "link")
+
+	return dir
+}
+
 // racyFixture leaves a.txt with the same size and mtime as its index entry,
 // with the index file itself written at that same instant: git cannot trust
 // the stat data and must compare content.
@@ -128,6 +142,59 @@ func testModified(t *testing.T) {
 			t.Helper()
 			dir := newRepo(t)
 			remove(t, filepath.Join(dir, "a.txt"))
+
+			return dir
+		}},
+		{name: "parent directory replaced by a file", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			commitFile(t, dir, "d/f.txt", "f\n", "nested")
+			remove(t, filepath.Join(dir, "d", "f.txt"))
+			remove(t, filepath.Join(dir, "d"))
+			write(t, dir, "d", "now a file\n")
+
+			return dir
+		}},
+		{name: "tracked executable unchanged", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			write(t, dir, "run.sh", "#!/bin/sh\n")
+			makeExecutable(t, filepath.Join(dir, "run.sh"))
+			git(t, dir, "add", "run.sh")
+			git(t, dir, "commit", "-q", "-m", "script")
+
+			return dir
+		}},
+		{name: "symlink replaced by a regular file", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
+			dir := symlinkRepo(t)
+			remove(t, filepath.Join(dir, "link"))
+			write(t, dir, "link", "a.txt")
+
+			return dir
+		}},
+		{name: "core.symlinks off, link still a link", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
+			dir := symlinkRepo(t)
+			git(t, dir, "config", "core.symlinks", "false")
+
+			return dir
+		}},
+		{name: "core.symlinks off, checked out as a plain file", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
+			dir := symlinkRepo(t)
+			git(t, dir, "config", "core.symlinks", "false")
+			remove(t, filepath.Join(dir, "link"))
+			write(t, dir, "link", "a.txt")
+
+			return dir
+		}},
+		{name: "core.symlinks off, replaced by a directory", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
+			dir := symlinkRepo(t)
+			git(t, dir, "config", "core.symlinks", "false")
+			remove(t, filepath.Join(dir, "link"))
+			mkdirAll(t, filepath.Join(dir, "link"))
 
 			return dir
 		}},
@@ -317,6 +384,23 @@ func testStaged(t *testing.T) {
 		wantCache *bool // when set, assert the cache-tree shortcut precondition
 	}{
 		{name: "clean after commit (cache-tree valid)", setup: newRepo, wantCache: ptr(true)},
+		{name: "index without a cache-tree", setup: func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			remove(t, filepath.Join(dir, ".git", "index"))
+			git(t, dir, "update-index", "--add", "a.txt")
+
+			return dir
+		}, wantCache: ptr(false)},
+		{name: "valid cache-tree of another tree", setup: func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			write(t, dir, "b.txt", "b\n")
+			git(t, dir, "add", "b.txt")
+			git(t, dir, "write-tree")
+
+			return dir
+		}, wantCache: ptr(false)},
 		{name: "staged add", setup: func(t *testing.T) string {
 			t.Helper()
 			dir := newRepo(t)

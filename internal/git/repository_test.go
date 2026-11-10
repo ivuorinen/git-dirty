@@ -130,7 +130,7 @@ func bareWithout(t *testing.T, f Format, sub string) string {
 // is a Unix layout: on Windows, os.Symlink rewrites the target's slashes.
 func symlinkHEAD(t *testing.T, dir, target string) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Skip("os.Symlink on Windows rewrites / to \\ in the target")
 	}
 	head := filepath.Join(dir, "HEAD")

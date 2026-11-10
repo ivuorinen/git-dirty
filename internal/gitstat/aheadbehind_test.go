@@ -45,6 +45,31 @@ func histories() map[string]history {
 
 			return dir, "old", mainBranch
 		},
+		"long shared history": func(t *testing.T) (string, string, string) {
+			t.Helper()
+			dir := newRepo(t)
+			for i := range walkSlop * 2 {
+				commitFile(t, dir, "h", strconv.Itoa(i), "shared")
+			}
+			git(t, dir, "switch", "-q", "-c", "fork")
+			commitFile(t, dir, "s", "1", "f1")
+			git(t, dir, "switch", "-q", mainBranch)
+			commitFile(t, dir, "m", "1", "m1")
+
+			return dir, "fork", mainBranch
+		},
+		"diamond on one side": func(t *testing.T) (string, string, string) {
+			t.Helper()
+			dir := newRepo(t)
+			branchFrom(t, dir, "base")
+			git(t, dir, "switch", "-q", "-c", "left")
+			commitFile(t, dir, "l", "1", "left")
+			git(t, dir, "switch", "-q", mainBranch)
+			commitFile(t, dir, "r", "1", "right")
+			git(t, dir, "merge", "-q", "--no-edit", "left")
+
+			return dir, mainBranch, "base"
+		},
 		"diverged": func(t *testing.T) (string, string, string) {
 			t.Helper()
 			dir := newRepo(t)

@@ -317,6 +317,29 @@ func TestConfig_EmptySubsection(t *testing.T) {
 	}
 }
 
+func TestConfigKeys(t *testing.T) {
+	cfg, err := ParseConfig([]byte("[a]\n\tx = 1\n\tY = 2\n\tx = 3\n[a \"s\"]\n\tz = 4\n[b]\n\tw = 5\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.Keys("A", ""), []string{"x", "y"}; !slices.Equal(got, want) {
+		t.Errorf("Keys(A) = %q, want %q", got, want)
+	}
+	if got, want := cfg.Keys("a", "s"), []string{"z"}; !slices.Equal(got, want) {
+		t.Errorf(`Keys(a, "s") = %q, want %q`, got, want)
+	}
+}
+
+func TestReadConfigFile_Malformed(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(file, []byte("[bad\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadConfigFile(file); err == nil || !strings.Contains(err.Error(), file) {
+		t.Errorf("err = %v, want one naming the file", err)
+	}
+}
+
 func TestParseConfig_Errors(t *testing.T) {
 	bad := map[string]string{
 		"unclosed section":   "[core\n\tbare = true\n",
