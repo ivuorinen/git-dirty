@@ -27,6 +27,7 @@ const (
 	flagConfig = "-config"
 
 	flagMaxDepth = "-m"
+	flagLikeFile = "-d3" // a config file name that looks like flags
 )
 
 // isolateEnv clears every setting git-dirty and git read from the
@@ -213,6 +214,8 @@ func TestExpandShortFlags(t *testing.T) {
 		{"-- -vac", "-- -vac"},
 		{"dir -tb", "dir -t -b"},
 		{flagConfig + " x", flagConfig + " x"},
+		{flagConfig + " -d3 -vac", flagConfig + " -d3 -v -a -c"},
+		{"--config -d3 -vac", "--config -d3 -v -a -c"},
 		{"-config=x -c", "-config=x -c"},
 	}
 	for _, tt := range tests {
@@ -409,6 +412,8 @@ func TestRunExitCodes(t *testing.T) {
 		{[]string{flagDepth}, exitUsage, "", "flag needs an argument"},
 		{[]string{flagDepth, "abc"}, exitUsage, "", "invalid value"},
 		{[]string{flagConfig}, exitUsage, "", "flag needs an argument"},
+		{[]string{flagConfig, flagLikeFile, flagHelp}, exitOK, "Configuration: " + flagLikeFile, ""},
+		{[]string{"--config", flagLikeFile, flagHelp}, exitOK, "Configuration: " + flagLikeFile, ""},
 		{[]string{flagHelp}, exitOK, "Usage: git-dirty", ""},
 		{[]string{"--version"}, exitOK, "dev", ""},
 		{[]string{flagMaxDepth, "0", t.TempDir()}, exitError, "", "maxDepth"},

@@ -370,7 +370,13 @@ func expandShortFlags(args []string) []string {
 		if arg == "--" {
 			return append(out, args[i:]...)
 		}
-		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		if n := configFlagArgs(args[i:]); n > 0 {
+			out = append(out, args[i:i+n]...)
+			i += n - 1
+
+			continue
+		}
+		if !isShortCluster(arg) {
 			out = append(out, arg)
 
 			continue
@@ -395,6 +401,23 @@ func expandShortFlags(args []string) []string {
 	}
 
 	return out
+}
+
+// configFlagArgs is how many arguments -config or --config takes at the
+// start of args, with its value, and 0 for any other argument. The value is
+// never expanded: in -config -d3, -d3 is a file name, as flag will read it.
+func configFlagArgs(args []string) int {
+	if args[0] != "-config" && args[0] != "--config" {
+		return 0
+	}
+
+	return min(2, len(args))
+}
+
+// isShortCluster reports whether arg is getopts-style short flags: one dash
+// and at least one letter.
+func isShortCluster(arg string) bool {
+	return len(arg) >= 2 && arg[0] == '-' && arg[1] != '-'
 }
 
 // expandCluster splits the letters after "-". takesNext reports that the last
