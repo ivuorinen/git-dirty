@@ -105,17 +105,11 @@ run = "prek install"
 description = "Scan for reachable vulnerabilities with govulncheck"
 run = "govulncheck ./..."
 
+# The targets are .goreleaser.yaml's builds, so the list lives in one place.
+# --skip=before leaves out the release's go mod tidy and license notices.
 [tasks.build-all]
-description = "Cross-compile for common platforms into dist/"
-run = '''
-for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-  os=${target%/*}
-  arch=${target#*/}
-  ext=""
-  if [ "$os" = windows ]; then ext=.exe; fi
-  GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "dist/git-dirty-$os-$arch$ext" .
-done
-'''
+description = "Cross-compile the release targets into dist/"
+run = "goreleaser build --snapshot --clean --skip=before"
 
 # Warm-cache comparison with the bash script it replaces (scripts/git-dirty.sh),
 # written to bench.md (gitignored). hyperfine discards the commands' output, so
