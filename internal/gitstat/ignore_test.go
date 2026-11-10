@@ -16,9 +16,7 @@ func ignored(t *testing.T, r *Repo, ex *Excludes, rel string, isDir bool) bool {
 		t.Fatal(err)
 	}
 	dirAbs := r.worktree
-	if st, err = st.push(dirAbs, nil); err != nil {
-		t.Fatal(err)
-	}
+	st = st.push(dirAbs, nil)
 	parts := strings.Split(rel, "/")
 	for i := range parts {
 		last := i == len(parts)-1
@@ -27,9 +25,7 @@ func ignored(t *testing.T, r *Repo, ex *Excludes, rel string, isDir bool) bool {
 		}
 		if !last {
 			dirAbs = filepath.Join(dirAbs, parts[i])
-			if st, err = st.push(dirAbs, parts[:i+1]); err != nil {
-				t.Fatal(err)
-			}
+			st = st.push(dirAbs, parts[:i+1])
 		}
 	}
 

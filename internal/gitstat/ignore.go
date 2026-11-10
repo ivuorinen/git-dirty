@@ -146,12 +146,12 @@ type ignoreStack struct{ gitrepo.Matcher }
 
 // push adds the .gitignore in dirAbs, whose path relative to the worktree is
 // domain.
-func (s ignoreStack) push(dirAbs string, domain []string) (ignoreStack, error) {
-	ps, err := gitrepo.ReadPatterns(filepath.Join(dirAbs, ".gitignore"), domain)
-	if err != nil || len(ps) == 0 {
-		return s, err
+func (s ignoreStack) push(dirAbs string, domain []string) ignoreStack {
+	ps := gitrepo.ReadGitignore(filepath.Join(dirAbs, ".gitignore"), domain)
+	if len(ps) == 0 {
+		return s
 	}
 	s.Patterns = slices.Concat(s.Patterns, ps) // a new slice; s is the caller's copy
 
-	return s, nil
+	return s
 }

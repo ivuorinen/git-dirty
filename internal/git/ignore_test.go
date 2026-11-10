@@ -21,10 +21,7 @@ func ignoredLikeWalk(t *testing.T, dir, rel string, isDir, ignoreCase bool) bool
 	parts := strings.Split(rel, "/")
 	cur := dir
 	for i := range parts {
-		ps, err := ReadPatterns(filepath.Join(cur, ".gitignore"), parts[:i])
-		if err != nil {
-			t.Fatal(err)
-		}
+		ps := ReadGitignore(filepath.Join(cur, ".gitignore"), parts[:i])
 		m.Patterns = append(m.Patterns[:len(m.Patterns):len(m.Patterns)], ps...)
 		last := i == len(parts)-1
 		if m.Ignored(parts[:i+1], !last || isDir) {

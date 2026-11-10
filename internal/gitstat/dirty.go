@@ -275,10 +275,7 @@ type untrackedWalker struct {
 }
 
 func (w *untrackedWalker) walk(dirAbs string, rel []string, st ignoreStack) (bool, error) {
-	st, err := st.push(dirAbs, rel)
-	if err != nil {
-		return false, err
-	}
+	st = st.push(dirAbs, rel)
 	entries, err := os.ReadDir(dirAbs)
 	if err != nil {
 		if rel == nil {

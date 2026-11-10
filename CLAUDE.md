@@ -119,7 +119,10 @@ and again for each settings-page save.
   `worktrees/<id>/gitdir` and `commondir` files), `maxConfigFile` (16 MiB,
   `ReadConfigFile` through `OpenRegular`, so a symlink to a device fails)
   and `maxHeadRef` (255 bytes of `HEAD` in `IsGitDir`, whose symlinked
-  `HEAD` is judged by its target, never followed). `IsGitDir` makes `Open`
+  `HEAD` is judged by its target, never followed). A `.gitignore` goes
+  through `ReadGitignore`, which does not follow a symlink, as git does;
+  `ReadPatterns` (`core.excludesFile`, `info/exclude`) opens regular files
+  only, so neither can block or flood the scan. `IsGitDir` makes `Open`
   reachable from checked-out content, not only from git-created `.git`
   dirs. Validate ref names with `ValidRefName`
   before they become paths, since `branch.*.merge` comes from repository

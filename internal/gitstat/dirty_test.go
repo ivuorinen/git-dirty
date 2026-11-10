@@ -447,6 +447,42 @@ func testUntracked(t *testing.T) {
 		unix  bool
 	}{
 		{name: "none", setup: newRepo},
+		{name: "a symlinked .gitignore is not followed", unix: true, setup: func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			commitFile(t, dir, "real", "*.log\n", "patterns")
+			if err := os.Symlink("real", filepath.Join(dir, ".gitignore")); err != nil {
+				t.Fatal(err)
+			}
+			git(t, dir, "add", ".gitignore")
+			git(t, dir, "commit", "-q", "-m", "link")
+			write(t, dir, "x.log", "l\n")
+
+			return dir
+		}},
+		{name: "a directory named .gitignore holds an untracked file", setup: func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			write(t, dir, ".gitignore/x", "x\n")
+
+			return dir
+		}},
+		{name: "core.excludesFile is the null device", setup: func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			git(t, dir, "config", "core.excludesFile", os.DevNull)
+			write(t, dir, "x.log", "l\n")
+
+			return dir
+		}},
+		{name: "core.excludesFile lies below a file", setup: func(t *testing.T) string {
+			t.Helper()
+			dir := newRepo(t)
+			git(t, dir, "config", "core.excludesFile", "a.txt/below")
+			write(t, dir, "x.log", "l\n")
+
+			return dir
+		}},
 		{name: "file at root", setup: func(t *testing.T) string {
 			t.Helper()
 			dir := newRepo(t)
