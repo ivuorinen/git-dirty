@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -149,6 +150,140 @@ func TestParseConfig_MatchesGit(t *testing.T) {
 		t.Error("subsection lookup is case-insensitive; git's is not")
 	}
 	checkConfigBool(t, cfg)
+}
+
+// gitConfigOutput runs git config on file and returns its untrimmed stdout.
+func gitConfigOutput(file string, args ...string) ([]byte, error) {
+	args = append([]string{"config", "--file", file}, args...)
+
+	return exec.Command("git", args...).Output() //nolint:gosec // G204: git is the test oracle
+}
+
+// gitConfigList returns what git reads from file, one "key=value" per entry
+// and "key" alone for a key without "=", or ok false when git refuses it.
+func gitConfigList(t *testing.T, file string) (entries []string, ok bool) {
+	t.Helper()
+	out, err := gitConfigOutput(file, "--null", "--list")
+
+	if err != nil {
+		return nil, false
+	}
+	for _, e := range strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00") {
+		if e != "" {
+			entries = append(entries, strings.Replace(e, "\n", "=", 1))
+		}
+	}
+
+	return entries, true
+}
+
+// listed renders cfg's entries as gitConfigList does.
+func listed(cfg *Config) []string {
+	out := make([]string, 0, len(cfg.entries))
+	for _, e := range cfg.entries {
+		name := e.name
+		if !e.noValue {
+			name += "=" + e.value
+		}
+		out = append(out, name)
+	}
+
+	return out
+}
+
+// TestParseConfig_GrammarMatchesGit runs each corner of the grammar through
+// git: the same entries when git accepts the file, an error when it refuses.
+// Whitespace inside a value is left out: git 2.45 changed how it reads that,
+// and TestParseConfig_MatchesGit covers it.
+func TestParseConfig_GrammarMatchesGit(t *testing.T) {
+	for _, in := range []string{
+		"[a]\n  spaced = 1\n",
+		"; first\n[a]\nk = 1\n",
+		"# no newline",
+		"[a]\nk",
+		"[a]\nk ",
+		"[a]\nk # c\n",
+		"[a]\nk ; c\n",
+		"[a]\nk = v\\",
+		"[ \"b\"]\nk = 1\n",
+		"\r\n",
+		"\r",
+		"[a]\n\rk = 1\n",
+		"[a]\nk = v\x0c\n",
+		"[a]\nk = \x0bv\n",
+		"[a.]\nk = 1\n",
+		"[a \"\"]\nk = 1\n",
+		"[a\r\"b\"]\nk = 1\n",
+		"[a \r\"b\"]\nk = 1\n",
+		"[a]\nk\t= v\n",
+		"[a]\nk x\n",
+		"[a]\nk = v",
+		"[a]\nk = a\\bc\n",
+		"[a]\nk = a\\xc\n",
+		"[a]\nk = \"open\n",
+		"[a]\nmy-key1 = 1\n",
+		"[a]\nk_x = 1\n",
+		"[a]\nk{ = 1\n",
+		"[a]\n1k = 1\n",
+		"[a-b.c]\nk = 1\n",
+		"[a",
+		"[a\n",
+		"[a_b]\nk = 1\n",
+		"[]\nk = 1\n",
+		"[a\t\"b\"]\nk = 1\n",
+		"[a  \"b\"]\nk = 1\n",
+		"[a \t\"b\"]\nk = 1\n",
+		"[a b]\nk = 1\n",
+		"[a \"b\"",
+		"[a \"b\"x]\n",
+		"[a \"b\n",
+		"[a \"b",
+		"[a \"",
+		"[a ",
+		"[a \n",
+		"[a \"b\\",
+		"[a \"b\\\n",
+		"[a \"b\\\"c\"]\nk = 1\n",
+		"[a]\nk = v\r",
+		"[a]\nk = v\r \n",
+		"[a]\nk = \x01v\n",
+		"k = 1\n",
+		"!\n",
+	} {
+		file := filepath.Join(t.TempDir(), "config")
+		if err := os.WriteFile(file, []byte(in), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want, gitOK := gitConfigList(t, file)
+		cfg, err := ParseConfig([]byte(in))
+		switch {
+		case gitOK != (err == nil):
+			t.Errorf("%q: err = %v, git accepts it: %v", in, err, gitOK)
+		case gitOK && !slices.Equal(listed(cfg), want):
+			t.Errorf("%q: entries %q, git says %q", in, listed(cfg), want)
+		}
+	}
+}
+
+// An explicitly empty subsection is its own section: git does not read
+// core.bare from [core ""].
+func TestConfig_EmptySubsection(t *testing.T) {
+	for _, body := range []string{"[core \"\"]\n\tbare = true\n", "[core.]\n\tbare = true\n"} {
+		file := filepath.Join(t.TempDir(), "config")
+		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := gitConfigGet(t, file, "core.bare", false); ok {
+			t.Fatalf("fixture: git reads core.bare from %q", body)
+		}
+		cfg, err := ReadConfigFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Bool(secCore, "", "bare", false) || len(cfg.Keys(secCore, "")) != 0 {
+			t.Errorf("%q: read as [core]", body)
+		}
+	}
 }
 
 func TestParseConfig_Errors(t *testing.T) {
