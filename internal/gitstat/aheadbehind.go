@@ -158,19 +158,14 @@ func newWalkState() *walkState {
 	}
 }
 
-// add merges bits f into the commit's flags and queues it when that changes
-// them.
+// add merges bits f into the commit's flags and queues it. f must change
+// them: visitParents checks, and the two tips differ.
 func (s *walkState) add(n commitNode, f uint8) {
 	old := s.flags[n.id]
 	nf := old | f
-	if nf == old {
-		return
-	}
 	s.flags[n.id] = nf
 	if s.queued[n.id] {
-		if nf == fromBoth {
-			s.nonStale-- // it was counted as non-stale when queued
-		}
+		s.nonStale-- // now common to both tips; it was non-stale when queued
 
 		return
 	}

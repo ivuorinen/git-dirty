@@ -66,7 +66,7 @@ func Run(ctx context.Context, opts Options) <-chan Item {
 				j.Result = gitstat.Inspect(ctx, j.Path, opts.Inspect)
 				// A bare repository's line counts its worktrees; when they
 				// could not be listed, it shows why instead of a count.
-				if j.listErr != nil && j.Result.Bare && j.Result.Err == nil {
+				if j.listErr != nil && j.Result.Bare {
 					j.Result.Err = fmt.Errorf("worktrees: %w", j.listErr)
 				}
 				send(ctx, out, j)

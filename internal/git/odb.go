@@ -329,7 +329,7 @@ func (c *baseCache) put(p *pack, off int64, t ObjectType, data []byte) {
 	if _, ok := c.m[k]; ok {
 		return
 	}
-	for c.used+len(data) > baseCacheBytes && len(c.order) > 0 {
+	for c.used+len(data) > baseCacheBytes { // data is at most a quarter of it, so older entries remain
 		old := c.order[0]
 		c.order = c.order[1:]
 		c.used -= len(c.m[old].data)
