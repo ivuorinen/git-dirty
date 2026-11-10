@@ -79,6 +79,9 @@ func Run(ctx context.Context, dir string, k Kind) Result {
 	cmd.WaitDelay = waitDelay
 	detach(cmd)
 	err := cmd.Run()
+	if ctx.Err() != nil {
+		reap(cmd)
+	}
 
 	return Result{Output: string(out.buf), Err: err}
 }

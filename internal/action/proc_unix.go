@@ -25,3 +25,14 @@ func detach(cmd *exec.Cmd) {
 		return err
 	}
 }
+
+// reap kills what is left of git's process group after a cancel. A hook or
+// helper that ignores SIGINT would otherwise outlive the TUI, still working
+// in the repository. It runs after git has exited and removed its lock
+// files; a program that left the group, as a gc that daemonizes does, is
+// not touched.
+func reap(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // ESRCH: nothing was left
+	}
+}

@@ -250,6 +250,54 @@ func TestRun_CancelStopsAStalledFetch(t *testing.T) {
 	}
 }
 
+// TestRun_CancelKillsWhatIgnoresSIGINT: a process in git's group that
+// ignores SIGINT, as a hook can, does not outlive a cancel. The fake
+// upload-pack writes a heartbeat, because a killed process can stay a
+// zombie that kill -0 still finds.
+func TestRun_CancelKillsWhatIgnoresSIGINT(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no process groups or SIGINT to ignore")
+	}
+	dir := clone(t, newRepo(t))
+	tmp := t.TempDir()
+	beat := filepath.Join(tmp, "beat")
+	script := filepath.Join(tmp, "upload-pack")
+	body := "#!/bin/sh\ntrap '' INT\nexec 2>/dev/null\ni=0\n" +
+		"while :; do i=$((i+1)); echo $i > '" + beat + "'; sleep 0.05; done\n"
+	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(script, 0o700); err != nil { //nolint:gosec // G302: the fake upload-pack must be executable
+		t.Fatal(err)
+	}
+	git(t, dir, "config", "remote.origin.uploadpack", script)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			if _, err := os.Stat(beat); err == nil {
+				cancel()
+
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	Run(ctx, dir, Fetch)
+	first, err := os.ReadFile(filepath.Clean(beat))
+	if err != nil {
+		t.Fatalf("the fake upload-pack never ran: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	second, err := os.ReadFile(filepath.Clean(beat))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Errorf("the process that ignores SIGINT still runs: heartbeat went from %q to %q", first, second)
+	}
+}
+
 func TestRun_GitNotFound(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", t.TempDir())

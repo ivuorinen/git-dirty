@@ -19,3 +19,7 @@ const createNoWindow = 0x08000000
 func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow}
 }
+
+// reap does nothing on Windows: the cancel killed git, and there is no
+// process group to reach what git started (see detach).
+func reap(*exec.Cmd) {}
