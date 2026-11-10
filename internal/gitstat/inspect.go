@@ -9,7 +9,7 @@ import (
 type Options struct {
 	CheckUntracked bool
 	CheckStash     bool
-	MainBranches   []string  // branch names treated as the default when origin/HEAD is absent
+	MainBranches   []string  // branch names treated as the default when refs/remotes/<remote>/HEAD is absent
 	Excludes       *Excludes // shared core.excludesFile patterns; may be nil
 }
 

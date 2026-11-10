@@ -9,7 +9,7 @@ import (
 	gitrepo "github.com/ivuorinen/git-dirty/internal/git"
 )
 
-// shortHashLen matches git's minimum abbreviation.
+// shortHashLen matches git's default abbreviation for small repositories.
 const shortHashLen = 7
 
 // Head describes what is checked out.

@@ -66,9 +66,10 @@ func (r Result) LastLine() string {
 // taken from a repository reaches git's arguments, and git applies the
 // user's safe.directory and safe.bareRepository settings to it. git
 // starts without a terminal and with stdin on the null device, so neither
-// git nor ssh can prompt: a credential that needs typing fails with git's
-// own message. Canceling ctx interrupts git the way ctrl+c in a terminal
-// does, so it removes its lock files.
+// git nor ssh can prompt on a terminal: a credential that needs typing
+// fails with git's own message, unless an askpass program the user
+// configured answers it. Canceling ctx interrupts git the way ctrl+c in a
+// terminal does, so it removes its lock files.
 func Run(ctx context.Context, dir string, k Kind) Result {
 	//nolint:forbidigo,gosec // the TUI's fetch and pull actions run git by design (CLAUDE.md)
 	cmd := exec.CommandContext(ctx, "git", k.args()...)
@@ -87,7 +88,8 @@ func Run(ctx context.Context, dir string, k Kind) Result {
 }
 
 // environ returns env without git's repository-local variables, with
-// GIT_TERMINAL_PROMPT=0 so git does not ask for a username or password.
+// GIT_TERMINAL_PROMPT=0 so git does not ask on a terminal for a username
+// or password.
 func environ(env []string) []string {
 	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
@@ -119,6 +121,8 @@ type tail struct {
 	buf []byte
 }
 
+// Write implements io.Writer. It reports all of p as written even when it
+// keeps only the end, because os/exec's copy stops at a short write.
 func (t *tail) Write(p []byte) (int, error) {
 	n := len(p)
 	if len(p) > outputTail {

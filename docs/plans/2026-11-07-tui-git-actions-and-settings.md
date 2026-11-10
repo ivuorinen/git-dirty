@@ -1,7 +1,7 @@
 # Plan: TUI git actions, mass actions and settings
 
 Date: 2026-11-07
-Status: ACCEPTED 2026-11-07 — awaiting the go-ahead to implement
+Status: ACCEPTED 2026-11-07, implemented on feat/tui-actions-settings
 
 ## Goal
 

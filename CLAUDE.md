@@ -47,9 +47,10 @@ and again for each settings-page save.
   `Defaults()`, through a temporary file renamed over the target (a
   symlinked file's target), keeping its mode.
 - **internal/git/**: stdlib-only readers for git's on-disk formats, SHA-1 and
-  SHA-256. `repository.go` (git dir, commondir, format check; `IsGitDir`,
-  git's test for a folder that is itself a git dir; `Repository.Bare`, set for
-  such a folder or for `core.bare` without commondir), `config.go`,
+  SHA-256. `repository.go` (git dir, commondir; `IsGitDir`, git's test for a
+  folder that is itself a git dir; `Repository.Bare`, set for such a folder or
+  for `core.bare` without commondir), `format.go` (repository format version,
+  `knownExtensions`), `hash.go` (object IDs, object hashing), `config.go`,
   `refs.go` (loose, packed, symbolic; `ValidRefName`), `refspec.go`,
   `index.go` and `splitindex.go` (v2-v4, TREE, split index with EWAH),
   `odb.go`, `pack.go` and `delta.go` (loose objects, packs, deltas, a 16 MiB
@@ -103,7 +104,8 @@ and again for each settings-page save.
   runs on, from the `gitstat.Result`) and `Run`, the one place git-dirty runs
   a program: `git` with fixed arguments in the repository's directory,
   without git's repository-local environment variables, with no terminal
-  (`proc_unix.go`: `Setsid`, and SIGINT to the process group on cancel;
+  (`proc_unix.go`: `Setsid`, SIGINT to the process group on cancel, and
+  `reap`'s SIGKILL to what is left of it once git has exited;
   `proc_windows.go`: `CREATE_NO_WINDOW`), keeping the last 4 KiB of output.
 
 ## Rules that are easy to break
@@ -160,9 +162,10 @@ and again for each settings-page save.
   or clock skew, can deliver a tip's bit after a commit was counted;
   `walkState.add` uncounts and re-queues it. Mutating it away fails
   `TestAheadBehind`.
-- **Global ignores come from `LoadExcludes`**, which reads both
-  `~/.config/git/config` and `~/.gitconfig` and defaults to
-  `~/.config/git/ignore`, as git does.
+- **Global ignores come from `LoadExcludes`**, which reads the system config
+  (unless `GIT_CONFIG_NOSYSTEM`), then `GIT_CONFIG_GLOBAL` or else
+  `$XDG_CONFIG_HOME/git/config` and `~/.gitconfig`, and defaults to
+  `$XDG_CONFIG_HOME/git/ignore`, as git does.
 - **Fuzzing:** pass `-fuzzminimizetime=5s`; with the default 60 s, the fuzzer
   minimizing a new input looks like a hang.
 - Golden files under `testdata/` are stored without trailing spaces, to satisfy

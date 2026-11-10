@@ -1,5 +1,6 @@
 // Package tui is the interactive tree browser. Its fetch and pull keys run
-// git through internal/action; everything else only reads.
+// git through internal/action, and its settings page writes the config
+// file; everything else only reads.
 package tui
 
 import (

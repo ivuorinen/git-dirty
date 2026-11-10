@@ -139,7 +139,7 @@ func TestIgnore_RepoExcludesFileOverridesGlobal(t *testing.T) {
 	checkAgainstGit(t, dir, []string{"a.rep", "a.log"})
 }
 
-func TestIgnore_NoSystemConfigRead(t *testing.T) {
+func TestIgnore_LoadsWithNoSystemConfig(t *testing.T) {
 	// GIT_CONFIG_NOSYSTEM is set by TestMain; a missing system file must not
 	// be an error either way.
 	if os.Getenv("GIT_CONFIG_NOSYSTEM") == "" {

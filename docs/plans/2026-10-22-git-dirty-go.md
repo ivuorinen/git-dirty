@@ -1,7 +1,7 @@
 # Plan: git-dirty — Go CLI + TUI
 
 Date: 2026-10-22
-Status: DRAFT — awaiting approval to implement
+Status: IMPLEMENTED; this is the draft of 2026-10-22
 
 ## Goal
 

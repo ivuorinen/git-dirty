@@ -15,9 +15,10 @@ type Repo struct {
 	repo     *gitrepo.Repository
 }
 
-// Open opens the working tree at path. The path must contain a .git
-// directory, or a .git file ("gitdir: <path>") as written for linked
-// worktrees and absorbed submodules.
+// Open opens the repository at path: a working tree holding a .git
+// directory or a .git file ("gitdir: <path>"), as written for linked
+// worktrees and absorbed submodules, or a folder that is itself a git
+// directory, which is opened as bare.
 func Open(path string) (*Repo, error) {
 	r, err := gitrepo.OpenWorktree(path)
 	if err != nil {

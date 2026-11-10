@@ -55,6 +55,8 @@ const (
 	objRefDelta ObjectType = 7
 )
 
+// String returns the type's name as object headers spell it; the pack-only
+// delta types have none.
 func (t ObjectType) String() string {
 	switch t {
 	case ObjCommit:
@@ -129,6 +131,7 @@ func (f Format) NewObjectHasher(t ObjectType, size int64) *ObjectHasher {
 	return &ObjectHasher{h: h, f: f}
 }
 
+// Write adds p to the hashed content. A hash.Hash never returns an error.
 func (o *ObjectHasher) Write(p []byte) (int, error) { return o.h.Write(p) }
 
 // Sum returns the object id.

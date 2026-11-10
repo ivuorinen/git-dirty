@@ -38,8 +38,7 @@ func (r *Repo) coreConfig() (coreConfig, error) {
 }
 
 // modified reports whether the worktree differs from the index, like
-// `git diff --quiet` failing. It stops at the first difference. ex is needed
-// for submodules, whose untracked files make them modified.
+// `git diff --quiet` failing. It stops at the first difference.
 func (r *Repo) modified(ctx context.Context, idx *gitrepo.Index, cc coreConfig, ex *Excludes) (bool, error) {
 	for i := range idx.Entries {
 		if i%ctxCheckEvery == 0 {

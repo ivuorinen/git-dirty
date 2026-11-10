@@ -14,7 +14,7 @@ checked-out branch has diverged from the default branch.
 │   │   └── 🌳 ⚠️ old ! worktree: gitdir file points to non-existent location
 │   ├── ✅ dotfiles ↓3
 │   ├── ❌ gh-history ↑1
-│   └── ⚠️ broken ! index: unknown extension
+│   └── ⚠️ broken ! index: unsupported index extension "sdir"
 ├── 🪵 plain.git (2 worktrees)
 │   ├── 🌳 ❌ plain-feat [M] (feat, no upstream) · vs main ↑1 ↓0
 │   └── 🌳 ✅ plain-main
@@ -31,8 +31,9 @@ makes no network requests: ahead/behind counts are measured against the
 remote-tracking refs as of your last fetch. The browser's fetch and pull keys
 are the exception: they run `git` in the selected repository ([Actions](#actions)).
 
-On a terminal it opens an interactive browser. When its output is piped, or
-with `--plain`, it prints the report.
+When stdin and stdout are terminals and `TERM` is not `dumb`, it opens an
+interactive browser. Otherwise, or with `--plain` or `"interactive": false`,
+it prints the report.
 
 ## Install
 
@@ -68,6 +69,7 @@ git-dirty [OPTIONS] [DIRECTORY]
 | `-b` | Toggle branch names (counts are always shown) |
 | `-p` | Accepted for compatibility; scanning is always parallel |
 | `--plain` | Print the report instead of opening the interactive browser |
+| `--config FILE` | Read settings from FILE, and save them there, instead of the default file |
 | `--version` | Print the version and exit |
 
 Short flags can be bundled as with the old script (`-vac`, `-d3`), and flags
@@ -95,7 +97,7 @@ a usage error, 130 when interrupted.
 | `(name ↑a ↓b)` | Current branch and its commits ahead of / behind its upstream. Zero counts are omitted. `no upstream` and `upstream gone` explain missing counts. On a detached HEAD, the exact tag or the short hash replaces the name. |
 | bare `↑a ↓b` | The same counts for a branch in the main-branch list, whose name is hidden |
 | `· main ↓4` | The local default branch against its own upstream. Shown only when not on the default branch and a count is non-zero. |
-| `· vs main ↑5 ↓1` | The checked-out commit against the default branch (`origin/main` when it exists, else the local `main`). Always shown, with both counts, when not on the default branch. |
+| `· vs main ↑5 ↓1` | The checked-out commit against the default branch (`<remote>/main`, with the remote chosen as described below, when it exists, else the local `main`). Always shown, with both counts, when not on the default branch. |
 
 The default branch is what `refs/remotes/<remote>/HEAD` points at, using the
 current branch's remote or `origin`. Without that ref, it is the first branch
@@ -140,9 +142,12 @@ uppercase key is the destructive variant of the lowercase one and asks first.
 - git runs in the repository's directory, with no terminal, stdin on the null
   device, `GIT_TERMINAL_PROMPT=0`, and without git's repository-local
   variables (`GIT_DIR`, `GIT_WORK_TREE` and the others
-  `git rev-parse --local-env-vars` lists). Nothing can be typed: a remote
-  needs ssh-agent or a credential helper. A key passphrase, an unknown host
-  key or a password prompt makes the action fail with git's message.
+  `git rev-parse --local-env-vars` lists). Nothing can be typed in the TUI: a
+  remote needs ssh-agent, a credential helper or an askpass program
+  (`GIT_ASKPASS`, `SSH_ASKPASS`, `core.askPass`), which opens its own window
+  and holds the action until it is answered. Without one, a key passphrase,
+  an unknown host key or a password prompt makes the action fail with git's
+  message.
 - It is git, run as you would run it in that directory: the repository's
   hooks, `core.fsmonitor`, `core.sshCommand` and credential helpers run, and
   `safe.directory` and `safe.bareRepository` apply. Run actions only in
@@ -220,26 +225,6 @@ file in use. Unknown keys are an error. Every key is optional:
 
 `interactive` has no environment variable; `--plain` turns it off.
 
-### Settings page
-
-`s` in the browser opens the config file's settings as a form: every key
-except `interactive`, which only `--plain` turns off, so saving it off would
-leave editing the file as the only way back. The form shows the file's
-values, not the environment's or the flags'; a row that one of them
-overrides also shows `overridden:` and the value in effect.
-
-`↑`/`↓` choose a row and `enter` toggles a true/false row or edits the
-others: type, paste or backspace, then `enter` keeps the value and `esc`
-drops it. `exclude` and `mainBranches` are comma separated, as `-e` takes
-them. `ctrl+s` checks the settings as startup does (a missing `dir` is an
-error), writes the file and rescans with them; on an error nothing is
-written. `esc` leaves the page and drops unsaved edits.
-
-A save writes only the keys whose values differ from the defaults, so a
-later change of a default reaches you; a hand-written key equal to its
-default is dropped. A symlinked config file stays a symlink and its target
-is replaced. The file keeps its mode, and a new one is created `0600`.
-
 A directory is skipped when its name is in the exclude list or it contains a
 file named `.ignore`. To hide a repository, add an empty `.ignore` next to its
 `.git` (inside the repository's folder, for a bare repository), and list
@@ -256,7 +241,30 @@ the scan. A worktree whose directory was deleted shows ⚠️ with git's wording
 removes it. Worktrees are not counted in "Found N git repositories".
 
 Ignore rules follow git's: `core.excludesFile` (default
-`~/.config/git/ignore`), `.git/info/exclude`, and every `.gitignore`.
+`$XDG_CONFIG_HOME/git/ignore`, `~/.config/git/ignore` when that is unset),
+`.git/info/exclude`, and every `.gitignore`.
+
+### Settings page
+
+`s` in the browser opens the config file's settings as a form: every key
+except `interactive`, which only `--plain` turns off, so saving it off would
+leave editing the file as the only way back. The form shows the file's
+values, not the environment's or the flags'; a row that one of them
+overrides also shows `overridden:` and the value in effect.
+
+`↑`/`↓` choose a row and `enter` toggles a true/false row or edits the
+others: type, paste or backspace, then `enter` keeps the value and `esc`
+drops it. `exclude` and `mainBranches` are comma separated, as `-e` takes
+them. `ctrl+s` checks the form's values, then the settings in effect as
+startup does (a missing directory is an error, unless the environment or a
+directory argument names another one), writes the file and rescans with
+them; on an error nothing is written. `esc` leaves the page and drops
+unsaved edits.
+
+A save writes only the keys whose values differ from the defaults, so a
+later change of a default reaches you; a hand-written key equal to its
+default is dropped. A symlinked config file stays a symlink and its target
+is replaced. The file keeps its mode, and a new one is created `0600`.
 
 ## Differences from the bash script
 
@@ -266,9 +274,9 @@ Ignore rules follow git's: `core.excludesFile` (default
 | The sourced config file overrides environment variables | Environment variables override the config file |
 | Indented list | Tree drawn with `├──`, `└──` and `│` |
 | `↑` letter for unpushed commits | Explicit `↑N ↓N` counts, plus the default-branch comparisons |
-| `-p` needs GNU parallel | `-p` is accepted and ignored; work is always concurrent |
+| `-p` uses GNU parallel when installed, else its own parallel jobs | `-p` is accepted and ignored; work is always concurrent |
 | `-d` is documented but not used | `-d` limits the depth of non-repository directories under `-v` |
-| `-t` has no visible effect | `-t` off prints full paths |
+| `-t` has no visible effect without `-p`; with it, it only deepens the indentation | `-t` off prints full paths |
 | Stash check reads the loose `refs/stash` file only | Packed refs are found too |
 | A linked worktree is listed only where the scan finds it, as a repository | Every linked worktree is listed under its repository, marked 🌳 |
 | A bare repository's folder is walked into, and its worktrees are listed on their own | A bare repository is listed with 🪵, its worktrees under it |
@@ -290,8 +298,7 @@ Ignore rules follow git's: `core.excludesFile` (default
 - `[include]` and `[includeIf]` in git config files are not followed.
 - Per-worktree config (`extensions.worktreeConfig`, `config.worktree`) is read
   for `core.bare` only, which decides whether a repository is listed as bare
-  (🪵); its other settings are not read. A repository with
-  `extensions.relativeWorktrees` is refused as an unknown extension.
+  (🪵); its other settings are not read.
 - `core.worktree` is not read: a git directory that names its working tree
   with it is listed as bare (🪵), where git would use that working tree.
 - A git directory made with `--separate-git-dir` (`git init` or `git clone`)
