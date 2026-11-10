@@ -18,8 +18,9 @@ const testConfigPath = "/home/u/.config/git-dirty/config.json"
 
 // fakeSettings stands in for main's Reconfigure and config.Save.
 type fakeSettings struct {
-	err   error           // what Reconfigure returns
-	saved []config.Config // each file layer Save was given
+	err     error           // what Reconfigure returns
+	saveErr error           // what Save returns
+	saved   []config.Config // each file layer Save was given
 }
 
 func (f *fakeSettings) reconfigure(file config.Config) (Config, error) {
@@ -33,7 +34,7 @@ func (f *fakeSettings) reconfigure(file config.Config) (Config, error) {
 func (f *fakeSettings) save(_ string, file config.Config) error {
 	f.saved = append(f.saved, file)
 
-	return nil
+	return f.saveErr
 }
 
 // newSettingsModel returns a model with a finished scan and the settings
@@ -178,6 +179,29 @@ func TestSettings_ReconfigureErrorWritesNothing(t *testing.T) {
 	if !strings.Contains(m.View().Content, "/missing: no such file or directory") {
 		t.Errorf("settings page lacks the error:\n%s", m.View().Content)
 	}
+}
+
+// TestSettings_FailedSaveKeepsThePage: the file was not written, so the
+// session keeps its settings and the page keeps the edit and the reason.
+func TestSettings_FailedSaveKeepsThePage(t *testing.T) {
+	m, f, fs := newSettingsModel(t)
+	fs.saveErr = errors.New("read-only file system")
+	press(m, "s")
+	editRow(t, m, "maxDepth", "9")
+	pressSave(m)
+	if len(fs.saved) != 1 {
+		t.Fatalf("Save called %d times, want 1", len(fs.saved))
+	}
+	if len(f.ctxs) != 1 {
+		t.Errorf("a failed save started %d scans in all, want the first one only", len(f.ctxs))
+	}
+	if !reflect.DeepEqual(m.cfg.File, config.Defaults()) {
+		t.Errorf("a failed save changed the file layer to %+v", m.cfg.File)
+	}
+	if m.settings == nil {
+		t.Fatal("a failed save closed the settings page")
+	}
+	wantView(t, m, []string{"save: read-only file system", "maxDepth        9"}, nil)
 }
 
 func TestSettings_Rows(t *testing.T) {
