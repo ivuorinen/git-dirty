@@ -170,8 +170,9 @@ The run goes one repository at a time, in the order listed: worktrees of one
 repository share its refs and lock files. A grid shows one cell per
 repository: `□` waiting, `▣` running, `■` done, and a failure as a red `■`,
 or `✗` without color. `esc` stops the run after the running repository. When
-the run ends, each failure is listed with git's last line, and `enter` or
-`esc` goes back to the tree and rescans. Without git on `PATH`, the run ends
+the run ends, each failure is listed with git's last line, `↑`/`↓` scroll
+the list when it does not fit the window, and `enter` or `esc` goes back to
+the tree and rescans. Without git on `PATH`, the run ends
 at its first repository.
 
 ## Configuration

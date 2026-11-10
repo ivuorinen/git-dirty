@@ -282,6 +282,94 @@ func TestMass_GridWrapsAtTheWindow(t *testing.T) {
 	}
 }
 
+// gridModel returns an 80x24 model on the grid page of a run of n targets.
+func gridModel(t *testing.T, n int) *Model {
+	t.Helper()
+	m, _, _ := newMassModel(t)
+	m.mass = &massRun{page: massGrid, kind: action.Fetch, paths: make([]string, n), cells: make([]cell, n)}
+	m.busy = true
+
+	return m
+}
+
+// TestMass_GridStaysInTheWindow: 1,000 targets are 25 rows at 80 columns,
+// more than the window has; the running cell and the keys stay on screen.
+func TestMass_GridStaysInTheWindow(t *testing.T) {
+	m := gridModel(t, 1000)
+	m.mass.next = 900
+	m.mass.cells[900] = cellRunning
+	v := m.View().Content
+	if rows := strings.Count(v, "\n") + 1; rows > 24 {
+		t.Errorf("the page is %d rows in a 24-row window", rows)
+	}
+	for _, want := range []string{"▣", "esc stop after this repository", "fetch --all: 0/1000 done"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("the page lacks %q:\n%s", want, v)
+		}
+	}
+}
+
+// TestMass_EveryFailureIsReachable: 60 failures do not fit 24 rows, and the
+// cursor keys reach the first and the last while the keys stay on screen.
+func TestMass_EveryFailureIsReachable(t *testing.T) {
+	m, _, _ := newRunModel(t, dirtyRepos(60)) // a run's failures are listed repositories
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	r := &massRun{page: massGrid, kind: action.Fetch, cells: make([]cell, 60), ended: true, next: 60}
+	m.mass = r
+	for i := range 60 {
+		r.cells[i] = cellFailed
+		r.failures = append(r.failures, fmt.Sprintf("/repo/%02d: fatal: no", i))
+	}
+	first, last := "/repo/00:", "/repo/59:"
+	if rows := strings.Count(m.View().Content, "\n") + 1; rows > 24 {
+		t.Errorf("the page is %d rows in a 24-row window", rows)
+	}
+	wantView(t, m, []string{first, "Failed (1-", "of 60):", "scroll"}, []string{last})
+	press(m, "k")
+	wantView(t, m, []string{first}, nil)
+	press(m, "j")
+	wantView(t, m, []string{"/repo/01:"}, []string{first})
+	press(m, "G")
+	wantView(t, m, []string{last, "enter or esc back"}, []string{first})
+	press(m, "g")
+	wantView(t, m, []string{first}, []string{last})
+}
+
+// wantView fails the test unless the view holds every string of has and
+// none of lacks.
+func wantView(t *testing.T, m *Model, has, lacks []string) {
+	t.Helper()
+	v := m.View().Content
+	for _, s := range has {
+		if !strings.Contains(v, s) {
+			t.Errorf("the view lacks %q:\n%s", s, v)
+		}
+	}
+	for _, s := range lacks {
+		if strings.Contains(v, s) {
+			t.Errorf("the view holds %q:\n%s", s, v)
+		}
+	}
+}
+
+func TestWindow(t *testing.T) {
+	lines := []string{"0", "1", "2", "3", "4", "5"}
+	tests := []struct {
+		room, focus int
+		want        []string
+	}{
+		{10, 3, lines},
+		{2, 0, []string{"0", "1"}},
+		{2, 3, []string{"2", "3"}},
+		{2, 99, []string{"4", "5"}},
+	}
+	for _, tt := range tests {
+		if got := window(lines, tt.room, tt.focus); !slices.Equal(got, tt.want) {
+			t.Errorf("window(room %d, focus %d) = %q, want %q", tt.room, tt.focus, got, tt.want)
+		}
+	}
+}
+
 func TestMass_FailedCellIsNotPlainDone(t *testing.T) {
 	m, _, _ := newMassModel(t)
 	if got := m.glyph(cellFailed); got != "✗" {

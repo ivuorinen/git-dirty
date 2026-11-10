@@ -22,6 +22,12 @@ import (
 // the repository's fetch updates them.
 const skipWorktree = "worktree, fetched with its repository"
 
+// massChrome is the window rows the grid page uses besides the grid and the
+// failures: title and status, then a blank line, the counts and a blank line
+// above the grid, a blank line and the progress line under it, a blank line
+// and the keys, and the empty help row View adds.
+const massChrome = 10
+
 // massPage is the page the mass-action dialog shows.
 type massPage int
 
@@ -50,6 +56,7 @@ type massRun struct {
 	skipped  map[string]int
 	cells    []cell
 	failures []string // "path: git's last line", in run order
+	failTop  int      // the first failure shown, when they do not all fit
 	next     int      // the target running, or the next to run
 	stopping bool     // esc during the run: start nothing more
 	ended    bool
@@ -149,7 +156,8 @@ func (m *Model) massWarningKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // massGridKey: esc during the run stops it after the running target;
-// after the run, enter or esc goes back to the tree and rescans.
+// after the run, enter or esc goes back to the tree and rescans, and the
+// cursor keys scroll the failures.
 func (m *Model) massGridKey(msg tea.KeyPressMsg) tea.Cmd {
 	r := m.mass
 	k := msg.String()
@@ -160,9 +168,22 @@ func (m *Model) massGridKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.mass = nil
 
 		return tea.Batch(m.startScan(), m.spinner.Tick)
+	case r.ended:
+		if n, ok := m.cursorStep(msg); ok {
+			r.failTop = m.clampFailTop(r.failTop + n)
+		}
 	}
 
 	return nil
+}
+
+// clampFailTop keeps the first failure shown within the list for the
+// current window, so a resize cannot leave the list scrolled past its end.
+func (m *Model) clampFailTop(top int) int {
+	r := m.mass
+	_, room := m.massRooms(len(m.grid(r.cells)))
+
+	return min(max(top, 0), max(len(r.failures)-room, 0))
 }
 
 // startMass starts the run: one target at a time, in display order.
@@ -269,8 +290,8 @@ func (m *Model) massWarningView() string {
 }
 
 // massGridView is the progress grid, one cell per target, and after the
-// run the failures. The failures are cut to the window, with a count of
-// the rest.
+// run the failures, which scroll when they do not fit: the list is gone
+// once the page is left, so every failure has to be reachable on it.
 func (m *Model) massGridView() string {
 	r := m.mass
 	done, failed := 0, 0
@@ -284,25 +305,64 @@ func (m *Model) massGridView() string {
 		case cellWaiting, cellRunning:
 		}
 	}
+	rows := m.grid(r.cells)
+	gridRoom, failRoom := m.massRooms(len(rows))
 	top := []string{"", m.bold(fmt.Sprintf("%s: %d/%d done, %d failed", r.kind, done, len(r.cells), failed)), ""}
-	top = append(top, m.grid(r.cells)...)
+	top = append(top, window(rows, gridRoom, r.next/m.cellsPerRow())...)
 	top = append(top, "", m.massProgress())
 	bottom := []string{"", "enter or esc back"}
 	if !r.ended {
 		bottom = []string{"", "esc stop after this repository"}
 	}
-	if r.ended && len(r.failures) > 0 {
-		room := m.height - 2 - len(top) - len(bottom) - 2
-		top = append(top, "", "Failed:")
-		top = append(top, fit(r.failures, room)...)
+	if failRoom > 0 {
+		from, head := m.clampFailTop(r.failTop), "Failed:"
+		if len(r.failures) > failRoom {
+			head = fmt.Sprintf("Failed (%d-%d of %d):", from+1, from+failRoom, len(r.failures))
+			bottom[1] = "↑/↓ scroll • enter or esc back"
+		}
+		top = append(top, "", head)
+		top = append(top, r.failures[from:from+failRoom]...)
 	}
 
 	return strings.Join(append(top, bottom...), "\n")
 }
 
+// massRooms divides the window between the grid and the failure list, so
+// the progress line and the keys stay on screen however many targets a run
+// has. During a run the grid may use all of it; after a run with failures
+// the list gets what it needs up to half the window, and more when the
+// grid is short.
+func (m *Model) massRooms(gridRows int) (gridRoom, failRoom int) {
+	r := m.mass
+	avail := max(1, m.height-massChrome)
+	if !r.ended || len(r.failures) == 0 {
+		return min(gridRows, avail), 0
+	}
+	avail = max(2, avail-2) // the blank line and the "Failed:" heading
+	failRoom = min(len(r.failures), max(1, avail-min(gridRows, avail/2)))
+
+	return min(gridRows, avail-failRoom), failRoom
+}
+
+// cellsPerRow is how many two-column cells fit the window's width.
+func (m *Model) cellsPerRow() int {
+	return max(1, m.width/2)
+}
+
+// window returns at most room of lines, centered on the line at focus as
+// far as the ends allow.
+func window(lines []string, room, focus int) []string {
+	if len(lines) <= room {
+		return lines
+	}
+	start := min(max(focus-room/2, 0), len(lines)-room)
+
+	return lines[start : start+room]
+}
+
 // grid lays the cells out in rows that fit the window, two columns each.
 func (m *Model) grid(cells []cell) []string {
-	perRow := max(1, m.width/2)
+	perRow := m.cellsPerRow()
 	var rows []string
 	var b strings.Builder
 	for i, c := range cells {
@@ -353,19 +413,6 @@ func (m *Model) massProgress() string {
 	}
 
 	return "finished"
-}
-
-// fit returns lines cut to room, the last kept line replaced by a count of
-// the cut ones.
-func fit(lines []string, room int) []string {
-	if len(lines) <= room {
-		return lines
-	}
-	if room < 1 {
-		return nil
-	}
-
-	return append(slices.Clone(lines[:room-1]), fmt.Sprintf("… and %d more", len(lines)-room+1))
 }
 
 // count is "1 repository" or "N repositories".
