@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -261,6 +262,36 @@ func TestParseConfig_GrammarMatchesGit(t *testing.T) {
 			t.Errorf("%q: err = %v, git accepts it: %v", in, err, gitOK)
 		case gitOK && !slices.Equal(listed(cfg), want):
 			t.Errorf("%q: entries %q, git says %q", in, listed(cfg), want)
+		}
+	}
+}
+
+// TestConfigBool_MatchesGit compares every boolean spelling with git's
+// --type=bool, which refuses what Bool answers with the default for.
+func TestConfigBool_MatchesGit(t *testing.T) {
+	for _, v := range []string{
+		"yes", "on", "1", "tRuE", "TRUE", "no", "off", "0", "false", "Off", "", "maybe",
+		"2", "-1", "+3", "0x10", "010", "00", "08", "1k", "2K", "1m", "1g", "0k", "2g", "k",
+		"99999999999", "1_000", " yes ", " 2", "2 ", "1x",
+	} {
+		file := filepath.Join(t.TempDir(), "config")
+		if err := os.WriteFile(file, []byte("[a]\n\tk = \""+v+"\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := gitConfigOutput(file, "--type=bool", "--get", "a.k")
+
+		cfg, perr := ReadConfigFile(file)
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		for _, def := range []bool{false, true} {
+			want := def
+			if err == nil {
+				want, _ = strconv.ParseBool(strings.TrimSpace(string(out)))
+			}
+			if got := cfg.Bool("a", "", "k", def); got != want {
+				t.Errorf("%q with default %v: Bool = %v, git says %q (%v)", v, def, got, out, err)
+			}
 		}
 	}
 }

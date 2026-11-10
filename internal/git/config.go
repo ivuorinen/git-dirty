@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -100,8 +103,9 @@ func (c *Config) GetAll(section, subsection, key string) []string {
 	return out
 }
 
-// Bool returns a boolean key the way git parses it (true/yes/on/1,
-// false/no/off/0, a bare key is true); def when absent or unparsable.
+// Bool returns a boolean key the way git_parse_maybe_bool does (true/yes/on,
+// false/no/off, an integer is true unless 0, a bare key is true); def when
+// absent or unparsable.
 func (c *Config) Bool(section, subsection, key string, def bool) bool {
 	name := variableName(section, subsection, key)
 	for i := len(c.entries) - 1; i >= 0; i-- {
@@ -112,17 +116,36 @@ func (c *Config) Bool(section, subsection, key string, def bool) bool {
 		if e.noValue {
 			return true
 		}
-		switch strings.ToLower(strings.TrimSpace(e.value)) {
-		case "true", "yes", "on", "1":
+		switch strings.ToLower(e.value) {
+		case "true", "yes", "on":
 			return true
-		case "false", "no", "off", "0", "":
+		case "false", "no", "off", "":
 			return false
+		}
+		if v, ok := intBool(e.value); ok {
+			return v
 		}
 
 		return def
 	}
 
 	return def
+}
+
+// configInt is what git_parse_int reads: strtoimax's base 0, then a unit.
+var configInt = regexp.MustCompile(`^[ \t\n\v\f\r]*([+-]?(?:0[xX][0-9a-fA-F]+|[0-9]+))([kKmMgG]?)$`)
+
+// intBool reads s as an integer and reports whether it is not 0; ok is false
+// unless, with its unit, it fits a C int.
+func intBool(s string) (v, ok bool) {
+	m := configInt.FindStringSubmatch(s)
+	if m == nil {
+		return false, false
+	}
+	n, err := strconv.ParseInt(m[1], 0, 32)
+	n <<= map[string]int{"k": 10, "m": 20, "g": 30}[strings.ToLower(m[2])]
+
+	return n != 0, err == nil && n >= math.MinInt32 && n <= math.MaxInt32
 }
 
 // Keys returns the lowercase key names present in section[.subsection].
