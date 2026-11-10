@@ -28,9 +28,6 @@ type ObjectID struct {
 // String returns the id in lowercase hex.
 func (id ObjectID) String() string { return hex.EncodeToString(id.b[:id.n]) }
 
-// Bytes returns the raw id.
-func (id ObjectID) Bytes() []byte { return append([]byte(nil), id.b[:id.n]...) }
-
 // IsZero reports whether the id is empty or all zero bytes.
 func (id ObjectID) IsZero() bool {
 	for _, c := range id.b[:id.n] {

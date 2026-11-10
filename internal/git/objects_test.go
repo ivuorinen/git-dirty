@@ -112,7 +112,7 @@ func mustParse(t *testing.T, r *Repository, hex string) ObjectID {
 func TestParseTree_CanonicalModes(t *testing.T) {
 	dir := newRepo(t, SHA1)
 	blob := mustParse(t, openRepo(t, dir), hashObject(t, dir, "blob", "x\n"))
-	raw := "100664 legacy\x00" + string(blob.Bytes()) + "100775 legacyexec\x00" + string(blob.Bytes())
+	raw := "100664 legacy\x00" + string(blob.b[:blob.n]) + "100775 legacyexec\x00" + string(blob.b[:blob.n])
 	entries, err := ParseTree([]byte(raw), SHA1)
 	if err != nil {
 		t.Fatal(err)

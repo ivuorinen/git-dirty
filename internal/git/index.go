@@ -23,27 +23,24 @@ type Index struct {
 
 // IndexEntry is one staged path.
 type IndexEntry struct {
-	CTime, MTime                   time.Time
-	Dev, Ino, Mode, UID, GID, Size uint32
-	ID                             ObjectID
-	Stage                          int
-	Name                           string
-	AssumeValid                    bool
-	SkipWorktree                   bool
-	IntentToAdd                    bool
+	MTime        time.Time
+	Mode, Size   uint32
+	ID           ObjectID
+	Stage        int
+	Name         string
+	SkipWorktree bool
+	IntentToAdd  bool
 }
 
 // CacheTree is the root of the TREE extension: the tree the index would
 // write, valid when Entries >= 0.
 type CacheTree struct {
-	Entries  int
-	Subtrees int
-	ID       ObjectID
+	Entries int
+	ID      ObjectID
 }
 
 // Entry flag bits, on disk.
 const (
-	flagAssumeValid   = 0x8000
 	flagExtended      = 0x4000
 	flagStageMask     = 0x3000
 	flagNameMask      = 0x0fff
@@ -162,16 +159,17 @@ func (d *indexDecoder) entryFields() (IndexEntry, uint16, error) {
 		return IndexEntry{}, 0, err
 	}
 	var e IndexEntry
-	cs, cn := d.u32(), d.u32()
+	d.pos += 8 // ctime: only mtime, mode and size are compared with the file
 	ms, mn := d.u32(), d.u32()
-	e.CTime = time.Unix(int64(cs), int64(cn))
 	e.MTime = time.Unix(int64(ms), int64(mn))
-	e.Dev, e.Ino, e.Mode, e.UID, e.GID, e.Size = d.u32(), d.u32(), d.u32(), d.u32(), d.u32(), d.u32()
+	d.pos += 8 // dev and ino
+	e.Mode = d.u32()
+	d.pos += 8 // uid and gid
+	e.Size = d.u32()
 	e.ID, _ = d.f.IDFromBytes(d.data[d.pos : d.pos+d.f.Size])
 	d.pos += d.f.Size
 	flags := binary.BigEndian.Uint16(d.data[d.pos:])
 	d.pos += 2
-	e.AssumeValid = flags&flagAssumeValid != 0
 	e.Stage = int(flags&flagStageMask) >> 12
 	if flags&flagExtended != 0 {
 		if d.version < 3 {
@@ -316,7 +314,7 @@ func parseRootCacheTree(b []byte, f Format) (*CacheTree, error) {
 	if err1 != nil || err2 != nil || subtrees < 0 || entries < -1 {
 		return nil, errors.New("TREE extension: malformed counts")
 	}
-	t := &CacheTree{Entries: entries, Subtrees: subtrees}
+	t := &CacheTree{Entries: entries}
 	if entries >= 0 {
 		rest := b[nl+1:]
 		if len(rest) < f.Size {

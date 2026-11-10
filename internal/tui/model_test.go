@@ -70,9 +70,7 @@ func newTestModel(t *testing.T) (*Model, *feeder) {
 }
 
 func repo(name string, res gitstat.Result) scan.Item {
-	res.Path = filepath.Join(root, name)
-
-	return scan.Item{Kind: scan.Repo, Path: res.Path, Rel: []string{name}, Result: res}
+	return scan.Item{Kind: scan.Repo, Path: filepath.Join(root, name), Rel: []string{name}, Result: res}
 }
 
 func results() []scan.Item {
@@ -105,7 +103,7 @@ func viewResults() []scan.Item {
 			Path:     wt,
 			Rel:      []string{bareRepo, "wt"},
 			Worktree: true,
-			Result:   gitstat.Result{Path: wt, Head: gitstat.Head{Branch: mainBranch, Label: mainBranch, Hash: h}},
+			Result:   gitstat.Result{Head: gitstat.Head{Branch: mainBranch, Label: mainBranch, Hash: h}},
 		},
 	)
 }
@@ -143,7 +141,7 @@ func TestUpdate_BatchAddsResults(t *testing.T) {
 	if got := m.tree.Repos(); got != 2 {
 		t.Errorf("repos = %d, want 2", got)
 	}
-	if got := len(m.lines()); got != 3 {
+	if got := len(m.styled); got != 3 {
 		t.Errorf("lines = %d, want 3 (root + 2 repos)", got)
 	}
 	if m.scanning {
@@ -172,9 +170,9 @@ func TestUpdate_StaleBatchIgnored(t *testing.T) {
 func TestUpdate_FilterToggle(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.Update(batchMsg{gen: m.gen, items: results(), done: true})
-	before := len(m.lines())
+	before := len(m.styled)
 	press(m, "d")
-	after := m.lines()
+	after := m.styled
 	if len(after) != before-1 {
 		t.Fatalf("dirty-only lines = %d, want %d", len(after), before-1)
 	}
@@ -182,7 +180,7 @@ func TestUpdate_FilterToggle(t *testing.T) {
 		t.Errorf("dirty-only view = %q", after)
 	}
 	press(m, "d")
-	if got := len(m.lines()); got != before {
+	if got := len(m.styled); got != before {
 		t.Errorf("lines after toggling back = %d, want %d", got, before)
 	}
 }
@@ -364,11 +362,11 @@ func TestSelection_ReturnsAfterTheFilterHidIt(t *testing.T) {
 func TestUpdate_BranchToggle(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.Update(batchMsg{gen: m.gen, items: results(), done: true})
-	if !strings.Contains(strings.Join(m.lines(), "\n"), "(feature") {
+	if !strings.Contains(strings.Join(m.styled, "\n"), "(feature") {
 		t.Fatal("branch name missing before toggle")
 	}
 	press(m, "b")
-	if strings.Contains(strings.Join(m.lines(), "\n"), "(feature") {
+	if strings.Contains(strings.Join(m.styled, "\n"), "(feature") {
 		t.Error("branch name still shown after b")
 	}
 }

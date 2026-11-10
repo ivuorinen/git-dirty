@@ -25,7 +25,6 @@ type Status struct {
 // repository, of which only Bare is known. When Err is set, the fields
 // filled before the failing stage are still valid.
 type Result struct {
-	Path     string
 	Bare     bool // no working tree; nothing past the open stage is inspected
 	Head     Head
 	Status   Status
@@ -48,7 +47,7 @@ func (r Result) Dirty() bool {
 // an error directly: failures are recorded in Result.Err, prefixed with the
 // stage.
 func Inspect(ctx context.Context, path string, opts Options) Result {
-	res := Result{Path: path}
+	var res Result
 	res.Err = inspect(ctx, path, opts, &res)
 
 	return res
@@ -94,7 +93,7 @@ func (r *Repo) inspectStatus(ctx context.Context, opts Options, res *Result) err
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	if res.Status.Modified, err = r.modified(ctx, idx, cc, opts.Excludes); err != nil {
+	if res.Status.Modified, err = r.modified(ctx, idx, cc); err != nil {
 		return fmt.Errorf("modified: %w", err)
 	}
 	if res.Status.Staged, err = r.staged(ctx, idx, res.Head.Hash); err != nil {

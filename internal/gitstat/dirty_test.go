@@ -36,11 +36,7 @@ func ourModified(t *testing.T, dir string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := LoadExcludes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := r.modified(context.Background(), idx, cc, ex)
+	got, err := r.modified(context.Background(), idx, cc)
 	if err != nil {
 		t.Fatal(err)
 	}

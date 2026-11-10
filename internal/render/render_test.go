@@ -34,10 +34,7 @@ func onBranch(name string) gitstat.Head {
 // The fixture's paths are slash-separated on every platform (path, not
 // filepath), so the truncate-off golden file holds on Windows too.
 func repo(rel string, res gitstat.Result) scan.Item {
-	parts := strings.Split(rel, "/")
-	res.Path = path.Join(root, rel)
-
-	return scan.Item{Kind: scan.Repo, Path: res.Path, Rel: parts, Result: res}
+	return scan.Item{Kind: scan.Repo, Path: path.Join(root, rel), Rel: strings.Split(rel, "/"), Result: res}
 }
 
 // worktree is a linked worktree listed under the repository its rel is in.
@@ -46,7 +43,6 @@ func worktree(rel string, res gitstat.Result) scan.Item {
 	it := repo(rel, res)
 	it.Worktree = true
 	it.Path = path.Join("/home/u/worktrees", path.Base(rel))
-	it.Result.Path = it.Path
 
 	return it
 }

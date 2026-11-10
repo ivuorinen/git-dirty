@@ -26,9 +26,9 @@ func massItems() []scan.Item {
 	upstream := &gitstat.Tracking{Ref: "origin/" + mainBranch}
 	onMain := gitstat.Head{Branch: mainBranch, Label: mainBranch}
 	worktree := func(name string, res gitstat.Result) scan.Item {
-		res.Path = filepath.Join(root, name)
+		p := filepath.Join(root, name)
 
-		return scan.Item{Kind: scan.Repo, Path: res.Path, Rel: []string{bareRepo, name}, Worktree: true, Result: res}
+		return scan.Item{Kind: scan.Repo, Path: p, Rel: []string{bareRepo, name}, Worktree: true, Result: res}
 	}
 
 	return []scan.Item{

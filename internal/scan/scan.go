@@ -199,7 +199,7 @@ func (d *discoverer) worktree(rel []string, wt gitrepo.Worktree) bool {
 	it := Item{Path: wt.Path, Rel: slices.Concat(rel, []string{wt.ID}), Worktree: true}
 	if wt.Err != nil {
 		it.Kind = Repo
-		it.Result = gitstat.Result{Path: wt.Path, Err: fmt.Errorf("worktree: %w", wt.Err)}
+		it.Result = gitstat.Result{Err: fmt.Errorf("worktree: %w", wt.Err)}
 
 		return send(d.ctx, d.out, it)
 	}

@@ -194,7 +194,7 @@ func TestODB_SelfReferencingRefDelta(t *testing.T) {
 	dir := newRepo(t, SHA1)
 	id := SHA1.HashObject(ObjBlob, []byte("loop"))
 	delta := zlibBytes(t, []byte{4, 4, 4, 'l', 'o', 'o', 'p'})
-	entry := append([]byte{byte(objRefDelta)<<4 | 7}, id.Bytes()...)
+	entry := append([]byte{byte(objRefDelta)<<4 | 7}, id.b[:id.n]...)
 	entry = append(entry, delta...)
 	writePack(t, dir, SHA1, id, entry, false)
 	_, _, err := openRepo(t, dir).ReadObject(id)

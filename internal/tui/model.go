@@ -506,12 +506,6 @@ func (m *Model) move(n int) {
 	m.draw()
 }
 
-// lines returns the listing as styled text, one string per row, without
-// the cursor gutter.
-func (m *Model) lines() []string {
-	return m.styled
-}
-
 // refresh rebuilds the listing from the tree and the filters, and puts the
 // cursor on the selected line, or keeps its index, within the listing, when
 // that line is not listed.
