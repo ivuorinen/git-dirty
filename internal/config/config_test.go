@@ -53,9 +53,35 @@ func writeConfig(t *testing.T, xdg, body string) {
 	}
 }
 
+// xdgFile is the default config file, as isolate's environment places it.
+func xdgFile(t *testing.T) string {
+	t.Helper()
+	p, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return p
+}
+
+// TestSplitList: blanks and empty items go, and no items is an empty list,
+// which a saved config holds as [] and not null.
+func TestSplitList(t *testing.T) {
+	for in, want := range map[string][]string{
+		"":          {},
+		" , ,":      {},
+		"a":         {"a"},
+		" a , b,,c": {"a", "b", "c"},
+	} {
+		if got := SplitList(in); !reflect.DeepEqual(got, want) {
+			t.Errorf("SplitList(%q) = %#v, want %#v", in, got, want)
+		}
+	}
+}
+
 func TestLoad_NoFileGivesDefaults(t *testing.T) {
 	isolate(t)
-	cfg, err := Load("")
+	cfg, err := Load(xdgFile(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +120,7 @@ func TestLoadFile_IgnoresTheEnvironment(t *testing.T) {
 	xdg := isolate(t)
 	writeConfig(t, xdg, `{"depth": 2}`)
 	t.Setenv("GIT_DIRTY_DEPTH", "7")
-	file, err := LoadFile("")
+	file, err := LoadFile(xdgFile(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +192,7 @@ func TestLoad_Precedence(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			cfg, err := Load("")
+			cfg, err := Load(xdgFile(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -382,7 +408,7 @@ func TestLoad_Errors(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			_, err := Load("")
+			_, err := Load(xdgFile(t))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
 			}

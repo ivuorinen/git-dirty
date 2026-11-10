@@ -70,11 +70,10 @@ func (r *Repo) resolve(name string) (id gitrepo.ObjectID, found bool, err error)
 func (r *Repo) upstream(
 	ctx context.Context,
 	w *commitWalker,
-	cfg *gitrepo.Config,
 	branch string,
 	from gitrepo.ObjectID,
 ) (*Tracking, error) {
-	ref, _, configured := upstreamRef(cfg, branch)
+	ref, _, configured := upstreamRef(r.repo.Config, branch)
 	if !configured {
 		return nil, nil
 	}
@@ -147,20 +146,19 @@ func (r *Repo) defaultBranchName(remote string, mainBranches []string) (string, 
 func (r *Repo) defaultBranch(
 	ctx context.Context,
 	w *commitWalker,
-	cfg *gitrepo.Config,
 	head Head,
 	mainBranches []string,
 ) (*DefaultBranch, error) {
 	if head.Unborn {
 		return nil, nil
 	}
-	remote := defaultRemote(cfg, head)
+	remote := defaultRemote(r.repo.Config, head)
 	name, err := r.defaultBranchName(remote, mainBranches)
 	if err != nil || name == "" || name == head.Branch {
 		return nil, err
 	}
 	d := &DefaultBranch{Name: name}
-	if d.Local, err = r.localTracking(ctx, w, cfg, name); err != nil {
+	if d.Local, err = r.localTracking(ctx, w, name); err != nil {
 		return nil, err
 	}
 	versusRef, err := r.versusRef(remote, name)
@@ -191,7 +189,6 @@ func defaultRemote(cfg *gitrepo.Config, head Head) string {
 func (r *Repo) localTracking(
 	ctx context.Context,
 	w *commitWalker,
-	cfg *gitrepo.Config,
 	name string,
 ) (*Tracking, error) {
 	id, found, err := r.resolve("refs/heads/" + name)
@@ -199,7 +196,7 @@ func (r *Repo) localTracking(
 		return nil, err
 	}
 
-	return r.upstream(ctx, w, cfg, name, id)
+	return r.upstream(ctx, w, name, id)
 }
 
 // versusRef is the ref the checkout is compared with: the remote-tracking

@@ -166,7 +166,7 @@ func (d *indexDecoder) entryFields() (IndexEntry, uint16, error) {
 	e.Mode = d.u32()
 	d.pos += 8 // uid and gid
 	e.Size = d.u32()
-	e.ID, _ = d.f.IDFromBytes(d.data[d.pos : d.pos+d.f.Size])
+	e.ID = d.f.IDFromBytes(d.data[d.pos : d.pos+d.f.Size])
 	d.pos += d.f.Size
 	flags := binary.BigEndian.Uint16(d.data[d.pos:])
 	d.pos += 2
@@ -320,7 +320,7 @@ func parseRootCacheTree(b []byte, f Format) (*CacheTree, error) {
 		if len(rest) < f.Size {
 			return nil, errors.New("TREE extension: truncated id")
 		}
-		t.ID, _ = f.IDFromBytes(rest[:f.Size])
+		t.ID = f.IDFromBytes(rest[:f.Size])
 	}
 
 	return t, nil

@@ -32,10 +32,7 @@ func ourModified(t *testing.T, dir string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cc, err := r.coreConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
+	cc := r.coreConfig()
 	got, err := r.modified(context.Background(), idx, cc)
 	if err != nil {
 		t.Fatal(err)
@@ -431,10 +428,7 @@ func ourUntracked(t *testing.T, dir string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cc, err := r.coreConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
+	cc := r.coreConfig()
 	got, err := r.untracked(context.Background(), idx, cc, ex)
 	if err != nil {
 		t.Fatal(err)

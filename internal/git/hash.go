@@ -22,22 +22,14 @@ const maxHashSize = 32
 // comparable and usable as a map key; the zero value is the empty id.
 type ObjectID struct {
 	b [maxHashSize]byte
-	n uint8
+	n int
 }
 
 // String returns the id in lowercase hex.
 func (id ObjectID) String() string { return hex.EncodeToString(id.b[:id.n]) }
 
 // IsZero reports whether the id is empty or all zero bytes.
-func (id ObjectID) IsZero() bool {
-	for _, c := range id.b[:id.n] {
-		if c != 0 {
-			return false
-		}
-	}
-
-	return true
-}
+func (id ObjectID) IsZero() bool { return id.b == [maxHashSize]byte{} }
 
 // ObjectType is a git object type, with the pack-only delta types.
 type ObjectType int
@@ -84,20 +76,13 @@ var (
 	SHA256 = Format{Name: "sha256", Size: sha256.Size, newHash: sha256.New}
 )
 
-// IDFromBytes makes an id from exactly f.Size raw bytes.
-func (f Format) IDFromBytes(b []byte) (ObjectID, error) {
-	n := f.Size
-	if n < 0 || n > maxHashSize {
-		return ObjectID{}, fmt.Errorf("%s id: unsupported size %d", f.Name, n)
-	}
-	if len(b) != n {
-		return ObjectID{}, fmt.Errorf("%s id: %d bytes, want %d", f.Name, len(b), n)
-	}
-	var id ObjectID
+// IDFromBytes makes an id from f.Size raw bytes. It has no error to report:
+// every caller slices b to that length after bounds-checking its own input.
+func (f Format) IDFromBytes(b []byte) ObjectID {
+	id := ObjectID{n: f.Size}
 	copy(id.b[:], b)
-	id.n = uint8(n)
 
-	return id, nil
+	return id
 }
 
 // ParseHex parses a full-length hex id.
@@ -110,7 +95,7 @@ func (f Format) ParseHex(s string) (ObjectID, error) {
 		return ObjectID{}, fmt.Errorf("%s id %q: %w", f.Name, s, err)
 	}
 
-	return f.IDFromBytes(buf[:f.Size])
+	return f.IDFromBytes(buf[:f.Size]), nil
 }
 
 // ObjectHasher computes an object id from streamed content.
@@ -132,11 +117,7 @@ func (f Format) NewObjectHasher(t ObjectType, size int64) *ObjectHasher {
 func (o *ObjectHasher) Write(p []byte) (int, error) { return o.h.Write(p) }
 
 // Sum returns the object id.
-func (o *ObjectHasher) Sum() ObjectID {
-	id, _ := o.f.IDFromBytes(o.h.Sum(nil))
-
-	return id
-}
+func (o *ObjectHasher) Sum() ObjectID { return o.f.IDFromBytes(o.h.Sum(nil)) }
 
 // HashObject returns the id of an object with the given type and content.
 func (f Format) HashObject(t ObjectType, data []byte) ObjectID {

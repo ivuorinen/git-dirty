@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -105,13 +106,7 @@ func environ(env []string) []string {
 // local reports whether name is one of localEnv. Windows ignores case in
 // variable names, so the comparison does too.
 func local(name string) bool {
-	for _, l := range localEnv {
-		if strings.EqualFold(name, l) {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(localEnv, func(l string) bool { return strings.EqualFold(name, l) })
 }
 
 // tail is a writer that keeps the last outputTail bytes written to it.
@@ -124,14 +119,10 @@ type tail struct {
 // Write implements io.Writer. It reports all of p as written even when it
 // keeps only the end, because os/exec's copy stops at a short write.
 func (t *tail) Write(p []byte) (int, error) {
-	n := len(p)
-	if len(p) > outputTail {
-		p = p[len(p)-outputTail:]
-	}
-	if over := len(t.buf) + len(p) - outputTail; over > 0 {
+	t.buf = append(t.buf, p...)
+	if over := len(t.buf) - outputTail; over > 0 {
 		t.buf = append(t.buf[:0], t.buf[over:]...)
 	}
-	t.buf = append(t.buf, p...)
 
-	return n, nil
+	return len(p), nil
 }

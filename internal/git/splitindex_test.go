@@ -136,3 +136,23 @@ func TestReadIndex_SplitIndexErrors(t *testing.T) {
 		t.Errorf("missing shared index: err = %v", err)
 	}
 }
+
+// TestReadIndex_SplitIndexConflict: the merge of the two index parts goes
+// through a map, so the order of a conflict's stages is the sort's alone.
+func TestReadIndex_SplitIndexConflict(t *testing.T) {
+	for _, f := range formats {
+		t.Run(f.Name, func(t *testing.T) {
+			dir := indexFixture(t, f)
+			run(t, dir, "config", "core.splitIndex", "true")
+			run(t, dir, "switch", "-q", "-c", "other")
+			commit(t, dir, "a.txt", "other\n", "other")
+			run(t, dir, "switch", "-q", "main")
+			commit(t, dir, "a.txt", "main\n", "main")
+			runCode(t, dir, nil, "merge", "-q", "other")
+			if rawLink(t, dir, f) == nil {
+				t.Fatal("fixture: no link extension after the merge")
+			}
+			checkEntries(t, dir, readIndex(t, dir))
+		})
+	}
+}

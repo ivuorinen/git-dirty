@@ -21,7 +21,6 @@ type Options struct {
 	Root     string
 	MaxDepth int      // directories deeper than this below Root are not entered
 	Exclude  []string // directory basenames never entered
-	Workers  int      // concurrent inspections; 0 means GOMAXPROCS
 	Inspect  gitstat.Options
 }
 
@@ -54,13 +53,9 @@ type Item struct {
 func Run(ctx context.Context, opts Options) <-chan Item {
 	out := make(chan Item, 64)
 	jobs := make(chan Item, 64)
-	workers := opts.Workers
-	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0)
-	}
 
 	var wg sync.WaitGroup
-	for range workers {
+	for range runtime.GOMAXPROCS(0) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

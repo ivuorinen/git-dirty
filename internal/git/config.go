@@ -360,14 +360,14 @@ func (p *configParser) variable(first byte) (key string, noValue bool, value str
 // keyName reads the rest of a key name starting with first, lowercased.
 func (p *configParser) keyName(first byte) string {
 	var name strings.Builder
-	name.WriteByte(toLower(first))
+	name.WriteByte(first)
 	for {
 		c, ok := p.peek()
 		if !ok || (!isAlnum(c) && c != '-') {
-			return name.String()
+			return strings.ToLower(name.String())
 		}
 		p.pos++
-		name.WriteByte(toLower(c))
+		name.WriteByte(c)
 	}
 }
 
@@ -478,11 +478,3 @@ func isAlnum(c byte) bool { return isAlpha(c) || c >= '0' && c <= '9' }
 
 // isSectionChar reports a byte allowed in a section name.
 func isSectionChar(c byte) bool { return isAlnum(c) || c == '-' || c == '.' }
-
-func toLower(c byte) byte {
-	if c >= 'A' && c <= 'Z' {
-		return c + 'a' - 'A'
-	}
-
-	return c
-}

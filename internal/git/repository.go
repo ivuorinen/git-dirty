@@ -1,6 +1,7 @@
 package git
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -31,9 +32,8 @@ type Repository struct {
 	Config    *Config
 	Bare      bool // no working tree: the git dir itself, or core.bare without commondir
 
-	packed     map[string]packedRef // packed-refs, loaded on first use
-	packedRead bool
-	odb        *odb // object database, opened on first use
+	packed map[string]packedRef // packed-refs, loaded on first use; non-nil once read
+	odb    *odb                 // object database, opened on first use
 }
 
 // OpenWorktree opens the repository at path: a working tree holding a .git
@@ -233,17 +233,9 @@ func validHeadRef(b []byte) bool {
 	if len(b) < 40 {
 		return false
 	}
-	for _, c := range b[:40] {
-		if !isHexDigit(c) {
-			return false
-		}
-	}
+	_, err := hex.DecodeString(string(b[:40]))
 
-	return true
-}
-
-func isHexDigit(c byte) bool {
-	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+	return err == nil
 }
 
 // isDir follows symlinks, as git's access(2) does.

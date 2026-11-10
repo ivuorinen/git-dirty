@@ -220,17 +220,6 @@ func upstreamTail(u *gitstat.Tracking, h gitstat.Head) string {
 // control characters (C0, DEL, C1) and invalid UTF-8 bytes become \xNN
 // escapes, so a directory or branch name cannot inject escape sequences.
 func Sanitize(s string) string {
-	clean := true
-	for _, r := range s {
-		if r == utf8.RuneError || unicode.IsControl(r) {
-			clean = false
-
-			break
-		}
-	}
-	if clean {
-		return s
-	}
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])

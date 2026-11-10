@@ -49,6 +49,21 @@ func TestHead(t *testing.T) {
 			wantDetached: true,
 		},
 		{
+			name: "detached on two tags",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := newRepo(t)
+				git(t, dir, "tag", "v2")
+				git(t, dir, "tag", "v1")
+				commitFile(t, dir, "b.txt", "b\n", "next")
+				git(t, dir, "switch", "-q", "--detach", "v1")
+
+				return dir
+			},
+			want:         gitLabel("describe", "--tags", "--exact-match"),
+			wantDetached: true,
+		},
+		{
 			name: "detached on annotated tag",
 			setup: func(t *testing.T) string {
 				t.Helper()

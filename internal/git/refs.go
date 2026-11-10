@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -49,11 +50,11 @@ func ValidRefName(name string) bool {
 		validRefBytes(name) && validRefComponents(name)
 }
 
-// hasBadRefSequence reports a trailing "/" or ".", or a "..", "@{" or "//"
-// anywhere in name.
+// hasBadRefSequence reports a trailing ".", or a ".." or "@{" anywhere in
+// name. An empty component, as "//" or a trailing "/" makes, is
+// validRefComponents' to reject.
 func hasBadRefSequence(name string) bool {
-	return strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") ||
-		strings.Contains(name, "..") || strings.Contains(name, "@{") || strings.Contains(name, "//")
+	return strings.HasSuffix(name, ".") || strings.Contains(name, "..") || strings.Contains(name, "@{")
 }
 
 // validRefBytes reports that name has no control characters and none of
@@ -172,13 +173,13 @@ func (r *Repository) Resolve(name string) (ObjectID, error) {
 // packedRefs loads packed-refs once. A tag's peeled id is recorded when the
 // file says so ("peeled" or "fully-peeled" traits and "^<id>" lines).
 func (r *Repository) packedRefs() (map[string]packedRef, error) {
-	if r.packedRead {
+	if r.packed != nil {
 		return r.packed, nil
 	}
 	refs := map[string]packedRef{}
 	f, err := os.Open(filepath.Join(r.CommonDir, "packed-refs"))
 	if errors.Is(err, fs.ErrNotExist) {
-		r.packed, r.packedRead = refs, true
+		r.packed = refs
 
 		return refs, nil
 	}
@@ -201,7 +202,7 @@ func (r *Repository) packedRefs() (map[string]packedRef, error) {
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	r.packed, r.packedRead = refs, true
+	r.packed = refs
 
 	return refs, nil
 }
@@ -247,13 +248,8 @@ func (r *Repository) Tags() ([]Ref, error) {
 	if err := r.looseTags(byName); err != nil {
 		return nil, err
 	}
-	out := make([]Ref, 0, len(byName))
-	for _, ref := range byName {
-		out = append(out, ref)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 
-	return out, nil
+	return slices.SortedFunc(maps.Values(byName), func(a, b Ref) int { return strings.Compare(a.Name, b.Name) }), nil
 }
 
 // looseTags adds every loose ref under refs/tags/ to byName.

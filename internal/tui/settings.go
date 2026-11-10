@@ -58,13 +58,7 @@ func listSetting(k string, p func(*config.Config) *[]string) settingField {
 		key: k,
 		get: func(c config.Config) string { return strings.Join(*p(&c), ", ") },
 		set: func(c *config.Config, s string) error {
-			list := []string{}
-			for _, item := range strings.Split(s, ",") {
-				if item = strings.TrimSpace(item); item != "" {
-					list = append(list, item)
-				}
-			}
-			*p(c) = list
+			*p(c) = config.SplitList(s)
 
 			return nil
 		},
@@ -132,13 +126,8 @@ func (p *settingsPage) insert(s string) {
 // requestSettings opens the settings page over the config file's layer.
 // A save rescans, and a scan and an action never overlap.
 func (m *Model) requestSettings() {
-	switch {
-	case m.busy:
+	if m.busy {
 		m.message = "settings: an action is running"
-
-		return
-	case m.cfg.Reconfigure == nil || m.cfg.Overlay == nil:
-		m.message = "settings: not available"
 
 		return
 	}

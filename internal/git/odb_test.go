@@ -3,14 +3,17 @@ package git
 import (
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 var realRepos = flag.Bool("realrepos", false, "self-check every object of the five largest repositories under ~/Code")
@@ -356,5 +359,55 @@ func TestODB_RealRepos(t *testing.T) {
 	for _, r := range repos {
 		n := selfCheck(t, r.dir)
 		t.Logf("%s: %d objects, %d MB of packs", r.dir, n, r.size>>20)
+	}
+}
+
+// zeroRead returns 0, nil once where r would report its end, which io.Reader
+// allows and readExact must not take for the end of the stream.
+type zeroRead struct {
+	r    io.Reader
+	done bool
+}
+
+// Read implements io.Reader.
+func (z *zeroRead) Read(p []byte) (int, error) {
+	n, err := z.r.Read(p)
+	if errors.Is(err, io.EOF) && !z.done {
+		z.done = true
+
+		return 0, nil
+	}
+
+	return n, err
+}
+
+// TestReadExact: the stream must end exactly at size, and an error other
+// than EOF after the content is reported, not taken for the end.
+func TestReadExact(t *testing.T) {
+	tests := []struct {
+		name    string
+		r       io.Reader
+		wantErr bool
+	}{
+		{"exact", strings.NewReader("abc"), false},
+		{"shorter", strings.NewReader("ab"), true},
+		{"longer", strings.NewReader("abcd"), true},
+		{"empty read before the end", &zeroRead{r: strings.NewReader("abc")}, false},
+		{
+			"error after the content",
+			io.MultiReader(strings.NewReader("abc"), iotest.ErrReader(errors.New("boom"))),
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := readExact(tt.r, 3)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && string(data) != "abc" {
+				t.Errorf("data = %q", data)
+			}
+		})
 	}
 }

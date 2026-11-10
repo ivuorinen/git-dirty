@@ -32,16 +32,15 @@ func trackingFor(t *testing.T, dir string) (*Tracking, *DefaultBranch) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := r.repo.Config
 	head, err := r.head()
 	if err != nil {
 		t.Fatal(err)
 	}
-	up, err := r.upstream(context.Background(), w, cfg, head.Branch, head.Hash)
+	up, err := r.upstream(context.Background(), w, head.Branch, head.Hash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	def, err := r.defaultBranch(context.Background(), w, cfg, head, testMainBranches)
+	def, err := r.defaultBranch(context.Background(), w, head, testMainBranches)
 	if err != nil {
 		t.Fatal(err)
 	}

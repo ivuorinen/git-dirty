@@ -64,7 +64,7 @@ func Path() (string, error) {
 }
 
 // Load returns the defaults overlaid with the config file at path (when it
-// exists) and then the environment. An empty path means Path().
+// exists) and then the environment.
 func Load(path string) (Config, error) {
 	cfg, err := LoadFile(path)
 	if err != nil {
@@ -76,27 +76,70 @@ func Load(path string) (Config, error) {
 
 // LoadFile returns the defaults overlaid with the config file at path, or
 // the defaults when it does not exist: the file layer, without the
-// environment. An empty path means Path().
-func LoadFile(path string) (Config, error) {
-	cfg := Defaults()
-	if path == "" {
-		p, err := Path()
-		if err != nil {
-			return cfg, err
-		}
-		path = p
+// environment.
+func LoadFile(path string) (cfg Config, err error) {
+	cfg = Defaults()
+	f, err := os.Open(filepath.Clean(path))
+	if errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
 	}
-	err := loadFile(path, &cfg)
+	if err != nil {
+		return cfg, err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
 
-	return cfg, err
+	dec := json.NewDecoder(f)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return cfg, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return cfg, fmt.Errorf("%s: unexpected data after the JSON object", path)
+	}
+
+	return cfg, nil
 }
 
 // ApplyEnv returns cfg overlaid with the GIT_DIRTY_* variables, VERBOSE and
 // NO_COLOR.
 func ApplyEnv(cfg Config) (Config, error) {
-	err := applyEnv(&cfg)
+	if v, ok := os.LookupEnv("GIT_DIRTY_DIR"); ok {
+		cfg.Dir = v
+	}
+	if err := envInt("GIT_DIRTY_DEPTH", &cfg.Depth); err != nil {
+		return cfg, err
+	}
+	if err := envInt("GIT_DIRTY_MAXDEPTH", &cfg.MaxDepth); err != nil {
+		return cfg, err
+	}
+	bools := []struct {
+		name string
+		dst  *bool
+	}{
+		{"GIT_DIRTY_CHECK_STASH", &cfg.CheckStash},
+		{"GIT_DIRTY_CHECK_UNTRACKED", &cfg.CheckUntracked},
+		{"GIT_DIRTY_COLOR", &cfg.Color},
+		{"GIT_DIRTY_TRUNCATE", &cfg.Truncate},
+		{"GIT_DIRTY_SHOW_BRANCH", &cfg.ShowBranch},
+		{"VERBOSE", &cfg.Verbose},
+	}
+	for _, e := range bools {
+		if err := envBool(e.name, e.dst); err != nil {
+			return cfg, err
+		}
+	}
+	if v, ok := os.LookupEnv("GIT_DIRTY_EXCLUDE"); ok {
+		cfg.Exclude = strings.Fields(v)
+	}
+	if v, ok := os.LookupEnv("GIT_DIRTY_MAIN_BRANCHES"); ok {
+		cfg.MainBranches = strings.Fields(v)
+	}
+	// https://no-color.org: present and non-empty disables color.
+	if os.Getenv("NO_COLOR") != "" {
+		cfg.Color = false
+	}
 
-	return cfg, err
+	return cfg, nil
 }
 
 // Save writes cfg to the config file at path, keeping only the settings that
@@ -220,74 +263,6 @@ func replace(target string, data []byte, mode os.FileMode) (err error) {
 	return os.Rename(tmp.Name(), target)
 }
 
-func loadFile(path string, cfg *Config) (err error) {
-	f, err := os.Open(filepath.Clean(path))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, f.Close()) }()
-
-	dec := json.NewDecoder(f)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(cfg); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("%s: unexpected data after the JSON object", path)
-	}
-
-	return nil
-}
-
-func applyEnv(cfg *Config) error {
-	if v, ok := os.LookupEnv("GIT_DIRTY_DIR"); ok {
-		cfg.Dir = v
-	}
-	ints := []struct {
-		name string
-		dst  *int
-	}{
-		{"GIT_DIRTY_DEPTH", &cfg.Depth},
-		{"GIT_DIRTY_MAXDEPTH", &cfg.MaxDepth},
-	}
-	for _, e := range ints {
-		if err := envInt(e.name, e.dst); err != nil {
-			return err
-		}
-	}
-	bools := []struct {
-		name string
-		dst  *bool
-	}{
-		{"GIT_DIRTY_CHECK_STASH", &cfg.CheckStash},
-		{"GIT_DIRTY_CHECK_UNTRACKED", &cfg.CheckUntracked},
-		{"GIT_DIRTY_COLOR", &cfg.Color},
-		{"GIT_DIRTY_TRUNCATE", &cfg.Truncate},
-		{"GIT_DIRTY_SHOW_BRANCH", &cfg.ShowBranch},
-		{"VERBOSE", &cfg.Verbose},
-	}
-	for _, e := range bools {
-		if err := envBool(e.name, e.dst); err != nil {
-			return err
-		}
-	}
-	if v, ok := os.LookupEnv("GIT_DIRTY_EXCLUDE"); ok {
-		cfg.Exclude = strings.Fields(v)
-	}
-	if v, ok := os.LookupEnv("GIT_DIRTY_MAIN_BRANCHES"); ok {
-		cfg.MainBranches = strings.Fields(v)
-	}
-	// https://no-color.org: present and non-empty disables color.
-	if os.Getenv("NO_COLOR") != "" {
-		cfg.Color = false
-	}
-
-	return nil
-}
-
 // envInt sets *dst from the variable name when it is set.
 func envInt(name string, dst *int) error {
 	v, ok := os.LookupEnv(name)
@@ -316,6 +291,21 @@ func envBool(name string, dst *bool) error {
 	*dst = b
 
 	return nil
+}
+
+// SplitList splits a comma-separated list, as -e and the settings page take
+// it: blanks around an item and empty items are dropped, as the bash script's
+// word splitting did. No items is an empty list, not nil, so a saved config
+// holds [] rather than null.
+func SplitList(s string) []string {
+	list := []string{}
+	for _, item := range strings.Split(s, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			list = append(list, item)
+		}
+	}
+
+	return list
 }
 
 // Normalize expands a leading ~ in Dir and validates the settings. main calls

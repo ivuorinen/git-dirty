@@ -54,9 +54,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	cfgPath, cfg, err := loadConfig(pre.configPath)
 	if err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 	opts, err := parseArgs(args, cfg)
 	if err != nil {
@@ -76,20 +74,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	cfg = opts.cfg
 	if err := cfg.Normalize(); err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 	if err := checkDir(cfg.Dir); err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 	ex, err := gitstat.LoadExcludes()
 	if err != nil {
-		printf(stderr, "%s: git ignore configuration: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, fmt.Errorf("git ignore configuration: %w", err))
 	}
 	if useTUI(cfg.Interactive, os.Getenv("TERM"), isTerminal(stdin), isTerminal(stdout)) {
 		return runTUI(ctx, session{args: args, path: cfgPath, ex: ex}, stdin, stdout, stderr)
@@ -116,6 +108,13 @@ func loadConfig(flagValue string) (path string, cfg config.Config, err error) {
 // left to be reported, so the error is dropped here rather than at each call.
 func printf(w io.Writer, format string, a ...any) {
 	_, _ = fmt.Fprintf(w, format, a...)
+}
+
+// fail reports err on w and returns the exit code for it.
+func fail(w io.Writer, err error) int {
+	printf(w, "%s: %v\n", programName, err)
+
+	return exitError
 }
 
 // checkDir reports a scan root that is missing or not a directory.
@@ -204,24 +203,18 @@ func (s session) overlay(file config.Config) (config.Config, error) {
 func runTUI(ctx context.Context, s session, stdin io.Reader, stdout, stderr io.Writer) int {
 	file, err := config.LoadFile(s.path)
 	if err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 	tc, err := s.tuiConfig(file)
 	if err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 	err = tui.Run(ctx, tc, stdin, stdout)
 	if ctx.Err() != nil {
 		return exitSignal
 	}
 	if err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 
 	return exitOK
@@ -278,9 +271,7 @@ func runPlain(ctx context.Context, cfg config.Config, so scan.Options, stdout, s
 		renderOptions(cfg),
 		color,
 	); err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 
 	return exitOK
@@ -443,22 +434,6 @@ func expandCluster(letters string) (expanded []string, takesNext, ok bool) {
 	return expanded, false, true
 }
 
-// excludeValue appends comma-separated names to the exclude list. Empty items
-// are skipped, as the bash script's word splitting did.
-type excludeValue struct{ list *[]string }
-
-func (e excludeValue) String() string { return "" }
-
-func (e excludeValue) Set(s string) error {
-	for _, item := range strings.Split(s, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			*e.list = append(*e.list, item)
-		}
-	}
-
-	return nil
-}
-
 func parseArgs(args []string, cfg config.Config) (options, error) {
 	opts := options{cfg: cfg}
 	c := &opts.cfg
@@ -467,6 +442,13 @@ func parseArgs(args []string, cfg config.Config) (options, error) {
 
 	fs := flag.NewFlagSet(programName, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	toggle := func(name string, b *bool) {
+		fs.BoolFunc(name, "", func(string) error {
+			*b = !*b
+
+			return nil
+		})
+	}
 	fs.BoolVar(&opts.help, "h", false, "")
 	fs.BoolVar(&opts.help, "help", false, "")
 	fs.BoolVar(&c.Verbose, "v", c.Verbose, "")
@@ -476,24 +458,16 @@ func parseArgs(args []string, cfg config.Config) (options, error) {
 
 		return nil
 	})
-	fs.BoolFunc("c", "", func(string) error {
-		c.Color = !c.Color
-
-		return nil
-	})
-	fs.BoolFunc("t", "", func(string) error {
-		c.Truncate = !c.Truncate
-
-		return nil
-	})
-	fs.BoolFunc("b", "", func(string) error {
-		c.ShowBranch = !c.ShowBranch
-
-		return nil
-	})
+	toggle("c", &c.Color)
+	toggle("t", &c.Truncate)
+	toggle("b", &c.ShowBranch)
 	fs.IntVar(&c.Depth, "d", c.Depth, "")
 	fs.IntVar(&c.MaxDepth, "m", c.MaxDepth, "")
-	fs.Var(excludeValue{&c.Exclude}, "e", "")
+	fs.Func("e", "", func(s string) error { // appends, so a repeated -e adds to the list
+		c.Exclude = append(c.Exclude, config.SplitList(s)...)
+
+		return nil
+	})
 	fs.BoolFunc("plain", "", func(string) error {
 		c.Interactive = false
 

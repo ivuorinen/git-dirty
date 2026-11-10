@@ -301,10 +301,7 @@ func (r *entryReader) ofsDeltaBase() (int64, error) {
 		rel = (rel+1)<<7 | uint64(c&0x7f)
 	}
 	off := r.off
-	if off < 0 {
-		return 0, fmt.Errorf("pack delta at %d has an invalid base offset", off)
-	}
-	if rel == 0 || rel >= uint64(off) {
+	if off < 0 || rel == 0 || rel >= uint64(off) {
 		return 0, fmt.Errorf("pack delta at %d has an invalid base offset", off)
 	}
 
@@ -316,7 +313,7 @@ func (r *entryReader) refDeltaBase(f Format) (ObjectID, error) {
 	if r.pos+f.Size > len(r.b) {
 		return ObjectID{}, fmt.Errorf("pack entry header at %d truncated", r.off)
 	}
-	id, _ := f.IDFromBytes(r.b[r.pos : r.pos+f.Size])
+	id := f.IDFromBytes(r.b[r.pos : r.pos+f.Size])
 	r.pos += f.Size
 
 	return id, nil

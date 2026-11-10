@@ -22,7 +22,7 @@ func ignored(t *testing.T, r *Repo, ex *Excludes, rel string, isDir bool) bool {
 	parts := strings.Split(rel, "/")
 	for i := range parts {
 		last := i == len(parts)-1
-		if st.match(parts[:i+1], !last || isDir) {
+		if st.Ignored(parts[:i+1], !last || isDir) {
 			return true
 		}
 		if !last {

@@ -162,15 +162,11 @@ func (m *Model) confirmKey(msg tea.KeyPressMsg) tea.Cmd {
 // the command changes.
 func (m *Model) confirmView() string {
 	c := m.confirm
-	title := c.kind.String()
-	if m.cfg.Color {
-		title = lipgloss.NewStyle().Bold(true).Render(title)
-	}
 	wrap := lipgloss.NewStyle().Width(max(1, m.width))
 
 	return strings.Join([]string{
 		"",
-		title,
+		m.bold(c.kind.String()),
 		render.Sanitize(c.path),
 		"",
 		wrap.Render(c.kind.Warning()),

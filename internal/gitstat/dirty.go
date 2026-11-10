@@ -27,14 +27,14 @@ type coreConfig struct {
 	ignoreCase bool // the filesystem is case-insensitive
 }
 
-func (r *Repo) coreConfig() (coreConfig, error) {
+func (r *Repo) coreConfig() coreConfig {
 	cfg := r.repo.Config
 
 	return coreConfig{
 		fileMode:   cfg.Bool("core", "", "filemode", true),
 		symlinks:   cfg.Bool("core", "", "symlinks", true),
 		ignoreCase: cfg.Bool("core", "", "ignorecase", false),
-	}, nil
+	}
 }
 
 // modified reports whether the worktree differs from the index, like
@@ -179,7 +179,8 @@ func hashWorktreeFile(abs string, fi fs.FileInfo, isLink bool, f gitrepo.Format)
 // which case any entry counts as staged.
 func (r *Repo) staged(ctx context.Context, idx *gitrepo.Index, head gitrepo.ObjectID) (bool, error) {
 	if head.IsZero() {
-		return hasStagedEntry(idx), nil
+		// An entry only marked intent-to-add has no content staged.
+		return slices.ContainsFunc(idx.Entries, func(e gitrepo.IndexEntry) bool { return !e.IntentToAdd }), nil
 	}
 	commit, err := r.repo.ReadCommit(head)
 	if err != nil {
@@ -197,18 +198,6 @@ func (r *Repo) staged(ctx context.Context, idx *gitrepo.Index, head gitrepo.Obje
 	}
 
 	return indexDiffersFromTree(idx, inTree), nil
-}
-
-// hasStagedEntry reports whether the index holds an entry with content, one
-// not only marked intent-to-add.
-func hasStagedEntry(idx *gitrepo.Index) bool {
-	for _, e := range idx.Entries {
-		if !e.IntentToAdd {
-			return true
-		}
-	}
-
-	return false
 }
 
 // treeBlob is a non-tree entry of a commit's tree.
@@ -323,9 +312,9 @@ func (w *untrackedWalker) visit(dirAbs string, rel []string, de fs.DirEntry, st 
 	path := append(slices.Clip(rel), name) // a fresh slice: siblings must not share it
 	_, isTracked := w.tracked[w.key(strings.Join(path, "/"))]
 	if !de.IsDir() { // files and symlinks, including symlinks to directories
-		return !isTracked && !st.match(path, false), nil
+		return !isTracked && !st.Ignored(path, false), nil
 	}
-	if isTracked || st.match(path, true) { // a submodule, or ignored
+	if isTracked || st.Ignored(path, true) { // a submodule, or ignored
 		return false, nil
 	}
 	sub := filepath.Join(dirAbs, name)
@@ -371,11 +360,7 @@ func submoduleChanged(ctx context.Context, abs string, want gitrepo.ObjectID) (b
 	if err != nil {
 		return false, err
 	}
-	cc, err := sub.coreConfig()
-	if err != nil {
-		return false, err
-	}
-	if changed, err := sub.modified(ctx, idx, cc); err != nil || changed {
+	if changed, err := sub.modified(ctx, idx, sub.coreConfig()); err != nil || changed {
 		return changed, err
 	}
 

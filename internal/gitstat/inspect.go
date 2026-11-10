@@ -10,7 +10,7 @@ type Options struct {
 	CheckUntracked bool
 	CheckStash     bool
 	MainBranches   []string  // branch names treated as the default when refs/remotes/<remote>/HEAD is absent
-	Excludes       *Excludes // shared core.excludesFile patterns; may be nil
+	Excludes       *Excludes // shared core.excludesFile patterns
 }
 
 // Status holds the dirty-state letters.
@@ -89,10 +89,7 @@ func (r *Repo) inspectStatus(ctx context.Context, opts Options, res *Result) err
 	if err != nil {
 		return fmt.Errorf("index: %w", err)
 	}
-	cc, err := r.coreConfig()
-	if err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
+	cc := r.coreConfig()
 	if res.Status.Modified, err = r.modified(ctx, idx, cc); err != nil {
 		return fmt.Errorf("modified: %w", err)
 	}
@@ -120,13 +117,12 @@ func (r *Repo) inspectTracking(ctx context.Context, opts Options, res *Result) e
 	if err != nil {
 		return fmt.Errorf("shallow: %w", err)
 	}
-	cfg := r.repo.Config
 	if !res.Head.Detached() {
-		if res.Upstream, err = r.upstream(ctx, w, cfg, res.Head.Branch, res.Head.Hash); err != nil {
+		if res.Upstream, err = r.upstream(ctx, w, res.Head.Branch, res.Head.Hash); err != nil {
 			return fmt.Errorf("ahead/behind: %w", err)
 		}
 	}
-	if res.Default, err = r.defaultBranch(ctx, w, cfg, res.Head, opts.MainBranches); err != nil {
+	if res.Default, err = r.defaultBranch(ctx, w, res.Head, opts.MainBranches); err != nil {
 		return fmt.Errorf("default branch: %w", err)
 	}
 

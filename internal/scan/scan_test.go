@@ -526,9 +526,7 @@ func TestRun_CancelClosesPromptly(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	opts := baseOpts(root)
-	opts.Workers = 4
-	ch := Run(ctx, opts)
+	ch := Run(ctx, baseOpts(root))
 	<-ch // the scan is running
 	cancel()
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,8 +59,8 @@ type Config struct {
 	// layer: the defaults and the file, without the environment or flags.
 	// Overlay applies both to a file layer, before ~ is expanded, to show
 	// which rows they override. Reconfigure rebuilds the Config from an
-	// edited file layer as main does at startup. With either nil the page
-	// is unavailable. Save writes the file layer; nil means config.Save.
+	// edited file layer as main does at startup. Save writes the file
+	// layer; nil means config.Save.
 	ConfigPath  string
 	File        config.Config
 	Overlay     func(config.Config) (config.Config, error)
@@ -71,12 +72,8 @@ type Config struct {
 // progress and waits for it to stop.
 func Run(ctx context.Context, cfg Config, in io.Reader, out io.Writer) error {
 	m := New(ctx, cfg)
-	final, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out)).Run()
-	if fm, ok := final.(*Model); ok {
-		fm.stop()
-	} else {
-		m.stop()
-	}
+	_, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out)).Run()
+	m.stop() // Update returns m every time, so m is the final model
 
 	return err
 }
@@ -239,10 +236,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the screen.
 func (m *Model) View() tea.View {
-	title := "git-dirty  " + render.Sanitize(m.cfg.Root)
-	if m.cfg.Color {
-		title = lipgloss.NewStyle().Bold(true).Render(title)
-	}
+	title := m.bold("git-dirty  " + render.Sanitize(m.cfg.Root))
 	body, help := m.vp.View(), m.help.View(m.keys)
 	switch {
 	case m.confirm != nil:
@@ -526,12 +520,8 @@ func (m *Model) refresh() {
 		m.styled[i] = b.String()
 	}
 	m.cursor = min(m.cursor, len(m.rows)-1)
-	for i, l := range m.rows {
-		if l.Node.Path == m.selected {
-			m.cursor = i
-
-			break
-		}
+	if i := slices.IndexFunc(m.rows, func(l tree.Line) bool { return l.Node.Path == m.selected }); i >= 0 {
+		m.cursor = i
 	}
 	m.draw()
 }
@@ -575,16 +565,12 @@ func (m *Model) layout() {
 
 func (m *Model) status() string {
 	repos := m.tree.Repos()
-	noun := "repositories"
-	if repos == 1 {
-		noun = "repository"
-	}
 	var s string
 	switch {
 	case m.busy:
 		s = fmt.Sprintf("%s %s…", m.spinner.View(), m.running)
 	case m.scanning:
-		s = fmt.Sprintf("%s Scanning… %d %s, %d directories", m.spinner.View(), repos, noun, m.dirs)
+		s = fmt.Sprintf("%s Scanning… %s, %d directories", m.spinner.View(), count(repos), m.dirs)
 	default:
 		s = render.Summary(repos, m.elapsed)
 	}
