@@ -34,14 +34,33 @@ func mustRun(t *testing.T, dir string, k Kind) {
 	}
 }
 
+// addRemote gives clone c a second remote holding a commit c has not
+// fetched, and returns a check that a fetch brought it in: without --all,
+// git fetches only origin.
+func addRemote(t *testing.T, c string) func() {
+	t.Helper()
+	other := newRepo(t)
+	git(t, c, "remote", "add", "other", other)
+	want := git(t, other, "rev-parse", "HEAD")
+
+	return func() {
+		t.Helper()
+		if git(t, c, "for-each-ref", "--points-at", want, "refs/remotes/other") == "" {
+			t.Errorf("no refs/remotes/other points at %s after the fetch", want)
+		}
+	}
+}
+
 func TestRun_Fetch(t *testing.T) {
 	up := newRepo(t)
 	c := clone(t, up)
 	commitFile(t, up, "b.txt", "b\n", "upstream")
+	fetchedOther := addRemote(t, c)
 	mustRun(t, c, Fetch)
 	if got := git(t, c, "rev-list", "--count", "HEAD..@{u}"); got != "1" {
 		t.Errorf("commits behind after fetch = %s, want 1", got)
 	}
+	fetchedOther()
 }
 
 func TestRun_FetchPrune(t *testing.T) {
@@ -59,10 +78,12 @@ func TestRun_FetchPrune(t *testing.T) {
 	if !exists() {
 		t.Fatal("fetch without --prune deleted origin/x")
 	}
+	fetchedOther := addRemote(t, c)
 	mustRun(t, c, FetchPrune)
 	if exists() {
 		t.Error("origin/x still exists after fetch --prune")
 	}
+	fetchedOther()
 }
 
 const tenLines = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
