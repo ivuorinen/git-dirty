@@ -158,19 +158,14 @@ func newWalkState() *walkState {
 	}
 }
 
-// add merges bits f into the commit's flags and queues it when that changes
-// them.
+// add merges bits f into the commit's flags and queues it. f must change
+// them: visitParents checks, and the two tips differ.
 func (s *walkState) add(n commitNode, f uint8) {
 	old := s.flags[n.id]
 	nf := old | f
-	if nf == old {
-		return
-	}
 	s.flags[n.id] = nf
 	if s.queued[n.id] {
-		if nf == fromBoth {
-			s.nonStale-- // it was counted as non-stale when queued
-		}
+		s.nonStale-- // now common to both tips; it was non-stale when queued
 
 		return
 	}
@@ -242,9 +237,14 @@ type queueItem struct {
 // commitQueue is a max-heap on commit time.
 type commitQueue []queueItem
 
-func (q commitQueue) Len() int           { return len(q) }
+// Len implements heap.Interface.
+func (q commitQueue) Len() int { return len(q) }
+
+// Less implements heap.Interface: newest first, which makes it a max-heap.
 func (q commitQueue) Less(i, j int) bool { return q[i].node.when.After(q[j].node.when) }
-func (q commitQueue) Swap(i, j int)      { q[i], q[j] = q[j], q[i] }
+
+// Swap implements heap.Interface.
+func (q commitQueue) Swap(i, j int) { q[i], q[j] = q[j], q[i] }
 
 // Push implements heap.Interface; the walk pushes only queueItem values.
 func (q *commitQueue) Push(x any) {
@@ -255,6 +255,8 @@ func (q *commitQueue) Push(x any) {
 	*q = append(*q, it)
 }
 
+// Pop implements heap.Interface: it removes the last item, where heap.Pop
+// has moved the root.
 func (q *commitQueue) Pop() any {
 	old := *q
 	it := old[len(old)-1]

@@ -1,11 +1,10 @@
 package git
 
 import (
-	"errors"
-	"io/fs"
+	"io"
 	"os"
 	"path"
-	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -68,12 +67,49 @@ func trimTrailingSpaces(s string) string {
 	return s[:end]
 }
 
-// ReadPatterns parses a gitignore-format file; a missing file has none.
+// ReadPatterns parses a core.excludesFile or info/exclude file, as git's
+// setup_standard_excludes does: a symlink is followed, and a file that cannot
+// be opened has no patterns. Neither has a device, which is what makes
+// core.excludesFile=/dev/null work, and which a repository's config cannot use
+// to block the scan. Only a directory is an error, as git dies on one, except
+// on Windows, where git reads no patterns from a directory and goes on.
 func ReadPatterns(file string, domain []string) ([]Pattern, error) {
-	b, err := os.ReadFile(filepath.Clean(file))
-	if errors.Is(err, fs.ErrNotExist) {
+	f, err := OpenRegular(file)
+	if err != nil {
+		if isDir(file) && runtime.GOOS != "windows" {
+			return nil, err
+		}
+
 		return nil, nil
 	}
+
+	return parsePatterns(f, domain)
+}
+
+// ReadGitignore parses a .gitignore as git does walking a worktree
+// (add_patterns with PATTERN_NOFOLLOW). A symlink is not followed: a clone
+// could point one at a device. One that cannot be read has no patterns.
+func ReadGitignore(file string, domain []string) []Pattern {
+	fi, err := os.Lstat(file)
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil
+	}
+	f, err := OpenRegular(file)
+	if err != nil {
+		return nil
+	}
+	ps, err := parsePatterns(f, domain)
+	if err != nil {
+		return nil
+	}
+
+	return ps
+}
+
+// parsePatterns reads f, a regular file, to its end and closes it.
+func parsePatterns(f *os.File, domain []string) ([]Pattern, error) {
+	defer func() { _ = f.Close() }() // read-only
+	b, err := io.ReadAll(f)
 	if err != nil {
 		return nil, err
 	}

@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -19,9 +22,20 @@ type Config struct {
 }
 
 type configEntry struct {
-	section, subsection, key string
-	value                    string
-	noValue                  bool // "key" alone, which git reads as true
+	name    string // see variableName; git compares variables by this string too
+	value   string
+	noValue bool // "key" alone, which git reads as true
+}
+
+// variableName is the variable section[.subsection].key as git spells it, with
+// the section and key lowercased.
+func variableName(section, subsection, key string) string {
+	section = strings.ToLower(section)
+	if subsection != "" {
+		section += "." + subsection
+	}
+
+	return section + "." + strings.ToLower(key)
 }
 
 // maxConfigFile caps a config file that ReadConfigFile reads; a repository's
@@ -66,8 +80,9 @@ func ReadConfigFile(path string) (*Config, error) {
 // Get returns the last value of section[.subsection].key. ok is false when
 // the key is absent; a key without "=" has the value "".
 func (c *Config) Get(section, subsection, key string) (value string, ok bool) {
+	name := variableName(section, subsection, key)
 	for i := len(c.entries) - 1; i >= 0; i-- {
-		if e := c.entries[i]; e.matches(section, subsection, key) {
+		if e := c.entries[i]; e.name == name {
 			return e.value, true
 		}
 	}
@@ -78,8 +93,9 @@ func (c *Config) Get(section, subsection, key string) (value string, ok bool) {
 // GetAll returns every value of a multi-valued key, in file order.
 func (c *Config) GetAll(section, subsection, key string) []string {
 	var out []string
+	name := variableName(section, subsection, key)
 	for _, e := range c.entries {
-		if e.matches(section, subsection, key) {
+		if e.name == name {
 			out = append(out, e.value)
 		}
 	}
@@ -87,22 +103,27 @@ func (c *Config) GetAll(section, subsection, key string) []string {
 	return out
 }
 
-// Bool returns a boolean key the way git parses it (true/yes/on/1,
-// false/no/off/0, a bare key is true); def when absent or unparsable.
+// Bool returns a boolean key the way git_parse_maybe_bool does (true/yes/on,
+// false/no/off, an integer is true unless 0, a bare key is true); def when
+// absent or unparsable.
 func (c *Config) Bool(section, subsection, key string, def bool) bool {
+	name := variableName(section, subsection, key)
 	for i := len(c.entries) - 1; i >= 0; i-- {
 		e := c.entries[i]
-		if !e.matches(section, subsection, key) {
+		if e.name != name {
 			continue
 		}
 		if e.noValue {
 			return true
 		}
-		switch strings.ToLower(strings.TrimSpace(e.value)) {
-		case "true", "yes", "on", "1":
+		switch strings.ToLower(e.value) {
+		case "true", "yes", "on":
 			return true
-		case "false", "no", "off", "0", "":
+		case "false", "no", "off", "":
 			return false
+		}
+		if v, ok := intBool(e.value); ok {
+			return v
 		}
 
 		return def
@@ -111,22 +132,36 @@ func (c *Config) Bool(section, subsection, key string, def bool) bool {
 	return def
 }
 
+// configInt is what git_parse_int reads: strtoimax's base 0, then a unit.
+var configInt = regexp.MustCompile(`^[ \t\n\v\f\r]*([+-]?(?:0[xX][0-9a-fA-F]+|[0-9]+))([kKmMgG]?)$`)
+
+// intBool reads s as an integer and reports whether it is not 0; ok is false
+// unless, with its unit, it fits a C int.
+func intBool(s string) (v, ok bool) {
+	m := configInt.FindStringSubmatch(s)
+	if m == nil {
+		return false, false
+	}
+	n, err := strconv.ParseInt(m[1], 0, 32)
+	n <<= map[string]int{"k": 10, "m": 20, "g": 30}[strings.ToLower(m[2])]
+
+	return n != 0, err == nil && n >= math.MinInt32 && n <= math.MaxInt32
+}
+
 // Keys returns the lowercase key names present in section[.subsection].
 func (c *Config) Keys(section, subsection string) []string {
+	prefix := variableName(section, subsection, "")
 	seen := map[string]bool{}
 	var out []string
 	for _, e := range c.entries {
-		if e.section == strings.ToLower(section) && e.subsection == subsection && !seen[e.key] {
-			seen[e.key] = true
-			out = append(out, e.key)
+		key, ok := strings.CutPrefix(e.name, prefix)
+		if ok && !strings.Contains(key, ".") && !seen[key] {
+			seen[key] = true
+			out = append(out, key)
 		}
 	}
 
 	return out
-}
-
-func (e configEntry) matches(section, subsection, key string) bool {
-	return e.section == strings.ToLower(section) && e.subsection == subsection && e.key == strings.ToLower(key)
 }
 
 // utf8BOM is skipped at the start of a config file, as git does.
@@ -141,8 +176,8 @@ func ParseConfig(data []byte) (*Config, error) {
 		p.pos = len(utf8BOM)
 	}
 	c := &Config{}
-	// Keys before any header belong to the empty section, as in git.
-	var section, subsection string
+	// Keys before any header have no section, as in git.
+	var prefix string
 	for {
 		ch, ok := p.next()
 		switch {
@@ -151,10 +186,11 @@ func ParseConfig(data []byte) (*Config, error) {
 		case p.skipBlank(ch):
 			continue
 		case ch == '[':
-			var err error
-			if section, subsection, err = p.header(); err != nil {
+			base, err := p.header()
+			if err != nil {
 				return nil, err
 			}
+			prefix = base + "."
 
 			continue
 		case !isAlpha(ch):
@@ -164,9 +200,7 @@ func ParseConfig(data []byte) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		c.entries = append(c.entries, configEntry{
-			section: section, subsection: subsection, key: key, value: value, noValue: noValue,
-		})
+		c.entries = append(c.entries, configEntry{name: prefix + key, value: value, noValue: noValue})
 	}
 }
 
@@ -215,7 +249,7 @@ func (p *configParser) skipLine() {
 // end, a blank, or a comment, whose rest it consumes.
 func (p *configParser) skipBlank(c byte) bool {
 	switch c {
-	case '\n', ' ', '\t':
+	case '\n', ' ', '\t', '\r':
 		return true
 	case '#', ';':
 		p.skipLine()
@@ -241,43 +275,31 @@ func (p *configParser) errorf(format string, a ...any) error {
 	return fmt.Errorf("bad config line %d: %s", p.line, fmt.Sprintf(format, a...))
 }
 
-// header parses after "[": a section name, then "]" or a quoted subsection.
-func (p *configParser) header() (section, subsection string, err error) {
+// header parses after "[" and returns "section[.subsection]": a section name,
+// then "]" or a quoted subsection.
+func (p *configParser) header() (string, error) {
 	var name strings.Builder
 	for {
 		c, ok := p.next()
 		switch {
 		case !ok || c == '\n':
-			return "", "", p.errorf("unterminated section header")
+			return "", p.errorf("unterminated section header")
 		case c == ']':
-			return p.closeHeader(name.String())
-		case c == ' ' || c == '\t':
 			if name.Len() == 0 {
-				return "", "", p.errorf("empty section name")
+				return "", p.errorf("empty section name")
 			}
+
+			return strings.ToLower(name.String()), nil // a dot is the legacy [section.subsection]
+		case isSpace(c):
 			sub, err := p.subsection()
 
-			return strings.ToLower(name.String()), sub, err
+			return strings.ToLower(name.String()) + "." + sub, err
 		case isSectionChar(c):
 			name.WriteByte(c)
 		default:
-			return "", "", p.errorf("invalid character %q in section name", c)
+			return "", p.errorf("invalid character %q in section name", c)
 		}
 	}
-}
-
-// closeHeader returns the section of a header without a quoted subsection,
-// splitting the legacy [section.subsection] form.
-func (p *configParser) closeHeader(name string) (section, subsection string, err error) {
-	if name == "" {
-		return "", "", p.errorf("empty section name")
-	}
-	n := strings.ToLower(name)
-	if s, sub, dotted := strings.Cut(n, "."); dotted {
-		return s, sub, nil // legacy [section.subsection]
-	}
-
-	return n, "", nil
 }
 
 // subsection parses ` "name"]` after the section name.
@@ -304,7 +326,7 @@ func (p *configParser) subsectionQuote() error {
 		if !ok || c == '\n' {
 			return p.errorf("unterminated section header")
 		}
-		if c == ' ' || c == '\t' {
+		if isSpace(c) {
 			continue
 		}
 		if c != '"' {
@@ -344,10 +366,6 @@ func (p *configParser) variable(first byte) (key string, noValue bool, value str
 	switch {
 	case !ok || c == '\n':
 		return name, true, "", nil
-	case c == '#' || c == ';':
-		p.skipLine()
-
-		return name, true, "", nil
 	case c == '=':
 		v, err := p.value()
 
@@ -360,14 +378,14 @@ func (p *configParser) variable(first byte) (key string, noValue bool, value str
 // keyName reads the rest of a key name starting with first, lowercased.
 func (p *configParser) keyName(first byte) string {
 	var name strings.Builder
-	name.WriteByte(toLower(first))
+	name.WriteByte(first)
 	for {
 		c, ok := p.peek()
 		if !ok || (!isAlnum(c) && c != '-') {
-			return name.String()
+			return strings.ToLower(name.String())
 		}
 		p.pos++
-		name.WriteByte(toLower(c))
+		name.WriteByte(c)
 	}
 }
 
@@ -393,10 +411,8 @@ func (p *configParser) value() (string, error) {
 func (p *configParser) escape(b *strings.Builder) error {
 	e, ok := p.next()
 	switch {
-	case !ok:
-		return p.errorf("unterminated escape")
-	case e == '\n':
-		// line continuation
+	case !ok || e == '\n':
+		// line continuation; git reads the end of the file as a newline
 	case e == 't':
 		b.WriteByte('\t')
 	case e == 'b':
@@ -471,18 +487,11 @@ func (v *configValue) end(p *configParser) (string, error) {
 	return s, nil
 }
 
-// isSpace is C's isspace, which parse_value uses; '\n' never reaches it.
-func isSpace(c byte) bool { return c == ' ' || c >= '\t' && c <= '\r' }
+// isSpace is git's isspace, which parse_value uses: unlike C's, it leaves out
+// \v and \f. '\n' never reaches it.
+func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' }
 func isAlpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 func isAlnum(c byte) bool { return isAlpha(c) || c >= '0' && c <= '9' }
 
 // isSectionChar reports a byte allowed in a section name.
 func isSectionChar(c byte) bool { return isAlnum(c) || c == '-' || c == '.' }
-
-func toLower(c byte) byte {
-	if c >= 'A' && c <= 'Z' {
-		return c + 'a' - 'A'
-	}
-
-	return c
-}

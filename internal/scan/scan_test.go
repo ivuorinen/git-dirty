@@ -526,9 +526,7 @@ func TestRun_CancelClosesPromptly(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	opts := baseOpts(root)
-	opts.Workers = 4
-	ch := Run(ctx, opts)
+	ch := Run(ctx, baseOpts(root))
 	<-ch // the scan is running
 	cancel()
 
@@ -572,4 +570,84 @@ func TestRun_ConsumerStopsReadingAfterCancel(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Errorf("goroutines = %d, baseline %d: senders blocked after cancel", runtime.NumGoroutine(), baseline)
+}
+
+// A directory that cannot be read is reported and passed over.
+func TestRun_UnreadableDirectory(t *testing.T) {
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	mkdir(t, root, "locked")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(locked, 0o700); err != nil { //nolint:gosec // G302: a directory has to be searchable
+			t.Error(err)
+		}
+	})
+	if _, err := os.ReadDir(locked); err == nil {
+		t.Skip("mode 0 does not stop this user")
+	}
+	c := collect(t, baseOpts(root))
+	if len(c.warnings) != 1 || !strings.HasPrefix(c.warnings[0], "locked: cannot read") {
+		t.Errorf("warnings = %q, want one for locked", c.warnings)
+	}
+}
+
+// canceledDiscoverer has nowhere to send and a canceled context, so every
+// send fails.
+func canceledDiscoverer() *discoverer {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	return &discoverer{ctx: ctx, out: make(chan Item), jobs: make(chan Item)}
+}
+
+func TestDiscoverer_StopsWhenCanceled(t *testing.T) {
+	root := t.TempDir()
+	mkrepo(t, root, "r")
+	dir := filepath.Join(root, "r")
+	if canceledDiscoverer().repo(dir, nil) {
+		t.Error("repo: true after a failed send")
+	}
+	d := canceledDiscoverer()
+	d.held = []Item{{Path: dir}, {Path: root}}
+	d.sendHeld() // returns at the first failed send; a second would block on no one
+
+	// The repository's job goes through and the cancel comes before its
+	// worktree's: the walk has to stop there.
+	gitIn(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitIn(t, dir, "worktree", "add", "-q", "--detach", filepath.Join(root, "wt"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	jobs := make(chan Item)
+	go func() {
+		<-jobs
+		cancel()
+	}()
+	d = &discoverer{ctx: ctx, out: make(chan Item), jobs: jobs}
+	if d.repo(dir, nil) {
+		t.Error("repo: true after its worktree could not be sent")
+	}
+}
+
+// The warning about worktrees that cannot be listed can be lost to a cancel
+// too, after the folder's job went through.
+func TestDiscoverer_SendHeldStopsAtTheWarning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	jobs := make(chan Item)
+	go func() {
+		<-jobs
+		cancel()
+	}()
+	d := &discoverer{ctx: ctx, out: make(chan Item), jobs: jobs}
+	d.held = []Item{{Path: t.TempDir(), listErr: os.ErrInvalid}, {Path: t.TempDir()}}
+	d.sendHeld() // only the first job is received; going on would block on no one
+}
+
+func TestIsClaimed_MissingFolder(t *testing.T) {
+	if (&discoverer{}).isClaimed(filepath.Join(t.TempDir(), "gone")) {
+		t.Error("a folder that is gone was claimed")
+	}
 }

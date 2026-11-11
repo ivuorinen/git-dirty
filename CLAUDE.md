@@ -8,7 +8,8 @@ code in this repository.
 `git-dirty` is a Go CLI and TUI that walks a directory for git working trees and
 shows each one as a tree line: branch, dirty letters (`M S ? $`), ahead/behind
 against the upstream, and the comparison with the default branch. A bare
-repository is a 🪵 line with its worktrees under it. It replaces a
+repository is a 🪵 line with its worktrees under it. The TUI can fetch and
+pull the selected repository. It replaces a
 bash script, kept as `scripts/git-dirty.sh` for `bench` and `compare.sh`, and
 keeps its flags and `GIT_DIRTY_*` environment variables.
 
@@ -34,15 +35,22 @@ go test ./internal/render/ -update  # Rewrite golden files; review the diff
 
 ## Architecture
 
-`main.go` loads config, parses flags (`expandShortFlags` + an `fs.Parse` loop so
+`main.go` parses the flags once over the defaults to find `-config`, loads
+that file, parses again over it (`expandShortFlags` + an `fs.Parse` loop so
 flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
+`session.tuiConfig` builds the TUI's settings from the file layer, at startup
+and again for each settings-page save.
 
 - **internal/config/**: defaults < `config.json` < `GIT_DIRTY_*` env. Flags
-  are applied in `main`.
+  are applied in `main`. `LoadFile` is the file layer, `ApplyEnv` adds the
+  environment, `Load` is both. `Save` writes only keys that differ from
+  `Defaults()`, through a temporary file renamed over the target (a
+  symlinked file's target), keeping its mode.
 - **internal/git/**: stdlib-only readers for git's on-disk formats, SHA-1 and
-  SHA-256. `repository.go` (git dir, commondir, format check; `IsGitDir`,
-  git's test for a folder that is itself a git dir; `Repository.Bare`, set for
-  such a folder or for `core.bare` without commondir), `config.go`,
+  SHA-256. `repository.go` (git dir, commondir; `IsGitDir`, git's test for a
+  folder that is itself a git dir; `Repository.Bare`, set for such a folder or
+  for `core.bare` without commondir), `format.go` (repository format version,
+  `knownExtensions`), `hash.go` (object IDs, object hashing), `config.go`,
   `refs.go` (loose, packed, symbolic; `ValidRefName`), `refspec.go`,
   `index.go` and `splitindex.go` (v2-v4, TREE, split index with EWAH),
   `odb.go`, `pack.go` and `delta.go` (loose objects, packs, deltas, a 16 MiB
@@ -81,7 +89,24 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   ANSI codes; the TUI styles the same segments with lipgloss. `Sanitize` escapes
   control bytes in every string that comes from a repository.
 - **internal/tui/**: bubbletea v2 model. Results arrive in 50 ms batches; a scan
-  generation number drops results from a replaced scan.
+  generation number drops results from a replaced scan. A cursor selects a
+  line, kept by `Node.Path` across redraws. `actions.go`: `f`/`F`/`p`/`P`
+  on the selected repository, one at a time, never during a scan, in a
+  goroutine `stop` waits for, with a generation number of their own; a
+  rescan follows each. `mass.go`: `m`, the same actions on every listed
+  repository `Check` accepts (`massTargets`; a fetch skips worktrees listed
+  under their repository), one at a time, with a progress grid.
+  `settings.go`: `s`, a form over the config file's layer (no `interactive`
+  row) with a line editor of its own: `bubbles/textinput` imports
+  `atotto/clipboard`, which runs clipboard programs on paste.
+- **internal/action/**: the TUI's fetch and pull. `Kind` (`Fetch`,
+  `FetchPrune`, `Pull`, `PullRebase`), `Check` (which repositories an action
+  runs on, from the `gitstat.Result`) and `Run`, the one place git-dirty runs
+  a program: `git` with fixed arguments in the repository's directory,
+  without git's repository-local environment variables, with no terminal
+  (`proc_unix.go`: `Setsid`, SIGINT to the process group on cancel, and
+  `reap`'s SIGKILL to what is left of it once git has exited;
+  `proc_windows.go`: `CREATE_NO_WINDOW`), keeping the last 4 KiB of output.
 
 ## Rules that are easy to break
 
@@ -94,15 +119,25 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   `worktrees/<id>/gitdir` and `commondir` files), `maxConfigFile` (16 MiB,
   `ReadConfigFile` through `OpenRegular`, so a symlink to a device fails)
   and `maxHeadRef` (255 bytes of `HEAD` in `IsGitDir`, whose symlinked
-  `HEAD` is judged by its target, never followed). `IsGitDir` makes `Open`
+  `HEAD` is judged by its target, never followed). A `.gitignore` goes
+  through `ReadGitignore`, which does not follow a symlink, as git does;
+  `ReadPatterns` (`core.excludesFile`, `info/exclude`) opens regular files
+  only, so neither can block or flood the scan. `IsGitDir` makes `Open`
   reachable from checked-out content, not only from git-created `.git`
   dirs. Validate ref names with `ValidRefName`
   before they become paths, since `branch.*.merge` comes from repository
   config. A decoder returns an error and never panics; the fuzz targets in
   `fuzz_test.go` check that, and a new decoder gets a fuzz target.
-- **Never execute `git` or anything else at runtime.** No hooks, no filters, no
-  fsmonitor. Tests may call `git`, because they use it as the oracle;
-  forbidigo rejects `exec.Command` outside `_test.go` files.
+- **Only internal/action runs a program, and only `git`.** It runs on a key
+  press in the TUI, with a fixed argv that holds nothing taken from a
+  repository (the repository is `cmd.Dir`, for a bare one too, so git
+  applies the user's `safe.bareRepository`), git's repository-local
+  environment variables stripped (`localEnv`, checked against
+  `git rev-parse --local-env-vars`), `GIT_TERMINAL_PROMPT=0` and no
+  terminal. Nothing else executes anything at runtime: the scan runs no
+  hooks, no filters, no fsmonitor. Tests may call `git`, because they use it
+  as the oracle; forbidigo rejects `exec.Command` outside `_test.go` files,
+  and `internal/action/run.go` holds the only `//nolint:forbidigo`.
 - **golangci-lint findings are fixed, not suppressed.** `//nolint:<linter> //
   <reason>` is only for code that is correct by design, such as `crypto/sha1`
   for git's object IDs or the tests' `exec.Command("git", ...)`; nolintlint
@@ -130,9 +165,10 @@ flags may follow the directory), then runs the TUI or plain mode (`useTUI`).
   or clock skew, can deliver a tip's bit after a commit was counted;
   `walkState.add` uncounts and re-queues it. Mutating it away fails
   `TestAheadBehind`.
-- **Global ignores come from `LoadExcludes`**, which reads both
-  `~/.config/git/config` and `~/.gitconfig` and defaults to
-  `~/.config/git/ignore`, as git does.
+- **Global ignores come from `LoadExcludes`**, which reads the system config
+  (unless `GIT_CONFIG_NOSYSTEM`), then `GIT_CONFIG_GLOBAL` or else
+  `$XDG_CONFIG_HOME/git/config` and `~/.gitconfig`, and defaults to
+  `$XDG_CONFIG_HOME/git/ignore`, as git does.
 - **Fuzzing:** pass `-fuzzminimizetime=5s`; with the default 60 s, the fuzzer
   minimizing a new input looks like a hang.
 - Golden files under `testdata/` are stored without trailing spaces, to satisfy

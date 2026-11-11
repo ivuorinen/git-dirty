@@ -3,13 +3,12 @@ package gitstat
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	gitrepo "github.com/ivuorinen/git-dirty/internal/git"
 )
 
-// shortHashLen matches git's minimum abbreviation.
+// shortHashLen matches git's default abbreviation for small repositories.
 const shortHashLen = 7
 
 // Head describes what is checked out.
@@ -65,13 +64,12 @@ func (r *Repo) head() (Head, error) {
 
 // exactTag returns the name of a tag pointing at commit, lightweight or
 // annotated, like `git describe --tags --exact-match`. With several, the
-// lexicographically first is returned.
+// lexicographically first is returned: Tags is sorted by name.
 func (r *Repo) exactTag(commit gitrepo.ObjectID) (string, error) {
 	tags, err := r.repo.Tags()
 	if err != nil {
 		return "", err
 	}
-	var names []string
 	for _, t := range tags {
 		target := t.Peeled
 		if target.IsZero() {
@@ -80,13 +78,9 @@ func (r *Repo) exactTag(commit gitrepo.ObjectID) (string, error) {
 			}
 		}
 		if target == commit {
-			names = append(names, strings.TrimPrefix(t.Name, "refs/tags/"))
+			return strings.TrimPrefix(t.Name, "refs/tags/"), nil
 		}
 	}
-	if len(names) == 0 {
-		return "", nil
-	}
-	sort.Strings(names)
 
-	return names[0], nil
+	return "", nil
 }

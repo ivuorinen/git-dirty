@@ -57,9 +57,6 @@ func TestObjectID_Malformed(t *testing.T) {
 			t.Errorf("ParseHex(%q): want error", bad)
 		}
 	}
-	if _, err := SHA1.IDFromBytes(make([]byte, 32)); err == nil {
-		t.Error("IDFromBytes with 32 bytes for SHA-1: want error")
-	}
 }
 
 func TestCheckFormat(t *testing.T) {

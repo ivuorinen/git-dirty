@@ -3,6 +3,7 @@ package gitstat
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,20 +17,16 @@ func ignored(t *testing.T, r *Repo, ex *Excludes, rel string, isDir bool) bool {
 		t.Fatal(err)
 	}
 	dirAbs := r.worktree
-	if st, err = st.push(dirAbs, nil); err != nil {
-		t.Fatal(err)
-	}
+	st = st.push(dirAbs, nil)
 	parts := strings.Split(rel, "/")
 	for i := range parts {
 		last := i == len(parts)-1
-		if st.match(parts[:i+1], !last || isDir) {
+		if st.Ignored(parts[:i+1], !last || isDir) {
 			return true
 		}
 		if !last {
 			dirAbs = filepath.Join(dirAbs, parts[i])
-			if st, err = st.push(dirAbs, parts[:i+1]); err != nil {
-				t.Fatal(err)
-			}
+			st = st.push(dirAbs, parts[:i+1])
 		}
 	}
 
@@ -90,6 +87,15 @@ func TestIgnore_GlobalExcludesFile(t *testing.T) {
 			paths: []string{"a.tmp", "a.txt"},
 		},
 		{
+			name: "an empty XDG_CONFIG_HOME means ~/.config",
+			setup: func(t *testing.T, home string) {
+				t.Helper()
+				t.Setenv("XDG_CONFIG_HOME", "")
+				write(t, home, ".config/git/ignore", "*.empty\n")
+			},
+			paths: []string{"a.empty", "kept.txt"},
+		},
+		{
 			name: "~/.gitconfig wins over the XDG config",
 			setup: func(t *testing.T, home string) {
 				t.Helper()
@@ -107,6 +113,75 @@ func TestIgnore_GlobalExcludesFile(t *testing.T) {
 			tt.setup(t, home)
 			checkAgainstGit(t, newRepo(t), tt.paths)
 		})
+	}
+}
+
+// A relative core.excludesFile is read from each repository's worktree.
+func TestIgnore_RelativeGlobalExcludesFile(t *testing.T) {
+	home := isolatedHome(t)
+	write(t, home, ".gitconfig", baseGitconfig+"[core]\n\texcludesFile = my-ignore\n")
+	dir := newRepo(t)
+	write(t, dir, "my-ignore", "*.rel\n")
+
+	checkAgainstGit(t, dir, []string{"a.rel", "kept.txt"})
+}
+
+func TestIgnore_MalformedGlobalConfig(t *testing.T) {
+	home := isolatedHome(t)
+	write(t, home, ".gitconfig", "[bad\n")
+	if _, err := LoadExcludes(); err == nil || !strings.Contains(err.Error(), "bad config line") {
+		t.Errorf("err = %v, want the parse error", err)
+	}
+}
+
+func TestIgnore_NoHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if h, _ := os.UserHomeDir(); h != "" {
+		t.Skipf("this platform has a home without HOME: %s", h)
+	}
+	ex, err := LoadExcludes()
+	if err != nil || ex.path != "" {
+		t.Errorf("Excludes = %+v, err = %v, want no excludes file", ex, err)
+	}
+}
+
+func TestGlobalConfigFiles(t *testing.T) {
+	const home, xdg, global = "/h", "/x", "/g"
+	system := "/etc/gitconfig"
+	xdgFile, homeFile := filepath.Join(xdg, "git", "config"), filepath.Join(home, ".gitconfig")
+	for _, c := range []struct {
+		name             string
+		noSystem, global string
+		home, xdg        string
+		want             []string
+	}{
+		{"everything", "", "", home, xdg, []string{system, xdgFile, homeFile}},
+		{"no system config", "1", "", home, xdg, []string{xdgFile, homeFile}},
+		{"GIT_CONFIG_GLOBAL replaces the rest", "", global, home, xdg, []string{system, global}},
+		{"no XDG directory", "1", "", home, "", []string{homeFile}},
+		{"no home", "1", "", "", xdg, []string{xdgFile}},
+	} {
+		t.Setenv("GIT_CONFIG_NOSYSTEM", c.noSystem)
+		t.Setenv("GIT_CONFIG_GLOBAL", c.global)
+		if got := globalConfigFiles(c.home, c.xdg); !slices.Equal(got, c.want) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestExpandHome(t *testing.T) {
+	const home, sub = "/h", "~/x"
+	for _, c := range []struct{ in, home, want string }{
+		{"~", home, filepath.Join(home, "")},
+		{sub, home, filepath.Join(home, "x")},
+		{"~user/x", home, "~user/x"},
+		{"x/~", home, "x/~"},
+		{sub, "", sub},
+	} {
+		if got := expandHome(c.in, c.home); got != c.want {
+			t.Errorf("expandHome(%q, %q) = %q, want %q", c.in, c.home, got, c.want)
+		}
 	}
 }
 
@@ -139,7 +214,24 @@ func TestIgnore_RepoExcludesFileOverridesGlobal(t *testing.T) {
 	checkAgainstGit(t, dir, []string{"a.rep", "a.log"})
 }
 
-func TestIgnore_NoSystemConfigRead(t *testing.T) {
+func TestIgnore_AbsoluteRepoExcludesFile(t *testing.T) {
+	isolatedHome(t)
+	dir := newRepo(t)
+	file := filepath.Join(t.TempDir(), "abs-ignore")
+	write(t, filepath.Dir(file), filepath.Base(file), "*.abs\n")
+	git(t, dir, "config", "core.excludesFile", file)
+
+	checkAgainstGit(t, dir, []string{"a.abs", "other.txt"})
+}
+
+func TestIgnore_NoExcludesFile(t *testing.T) {
+	st, err := open(t, newRepo(t)).rootIgnores(&Excludes{})
+	if err != nil || len(st.Patterns) != 0 {
+		t.Errorf("patterns = %v, err = %v, want none", st.Patterns, err)
+	}
+}
+
+func TestIgnore_LoadsWithNoSystemConfig(t *testing.T) {
 	// GIT_CONFIG_NOSYSTEM is set by TestMain; a missing system file must not
 	// be an error either way.
 	if os.Getenv("GIT_CONFIG_NOSYSTEM") == "" {

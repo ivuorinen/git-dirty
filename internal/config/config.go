@@ -4,6 +4,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,61 +63,54 @@ func Path() (string, error) {
 	return filepath.Join(home, ".config", "git-dirty", "config.json"), nil
 }
 
-// Load returns the defaults overlaid with the config file (when it exists)
-// and then the environment.
-func Load() (Config, error) {
-	cfg := Defaults()
-	path, err := Path()
+// Load returns the defaults overlaid with the config file at path (when it
+// exists) and then the environment.
+func Load(path string) (Config, error) {
+	cfg, err := LoadFile(path)
 	if err != nil {
 		return cfg, err
 	}
-	if err := loadFile(path, &cfg); err != nil {
-		return cfg, err
-	}
-	if err := applyEnv(&cfg); err != nil {
-		return cfg, err
-	}
 
-	return cfg, nil
+	return ApplyEnv(cfg)
 }
 
-func loadFile(path string, cfg *Config) (err error) {
+// LoadFile returns the defaults overlaid with the config file at path, or
+// the defaults when it does not exist: the file layer, without the
+// environment.
+func LoadFile(path string) (cfg Config, err error) {
+	cfg = Defaults()
 	f, err := os.Open(filepath.Clean(path))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return cfg, nil
 	}
 	if err != nil {
-		return err
+		return cfg, err
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
 
 	dec := json.NewDecoder(f)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(cfg); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+	if err := dec.Decode(&cfg); err != nil {
+		return cfg, fmt.Errorf("%s: %w", path, err)
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("%s: unexpected data after the JSON object", path)
+		return cfg, fmt.Errorf("%s: unexpected data after the JSON object", path)
 	}
 
-	return nil
+	return cfg, nil
 }
 
-func applyEnv(cfg *Config) error {
+// ApplyEnv returns cfg overlaid with the GIT_DIRTY_* variables, VERBOSE and
+// NO_COLOR.
+func ApplyEnv(cfg Config) (Config, error) {
 	if v, ok := os.LookupEnv("GIT_DIRTY_DIR"); ok {
 		cfg.Dir = v
 	}
-	ints := []struct {
-		name string
-		dst  *int
-	}{
-		{"GIT_DIRTY_DEPTH", &cfg.Depth},
-		{"GIT_DIRTY_MAXDEPTH", &cfg.MaxDepth},
+	if err := envInt("GIT_DIRTY_DEPTH", &cfg.Depth); err != nil {
+		return cfg, err
 	}
-	for _, e := range ints {
-		if err := envInt(e.name, e.dst); err != nil {
-			return err
-		}
+	if err := envInt("GIT_DIRTY_MAXDEPTH", &cfg.MaxDepth); err != nil {
+		return cfg, err
 	}
 	bools := []struct {
 		name string
@@ -131,7 +125,7 @@ func applyEnv(cfg *Config) error {
 	}
 	for _, e := range bools {
 		if err := envBool(e.name, e.dst); err != nil {
-			return err
+			return cfg, err
 		}
 	}
 	if v, ok := os.LookupEnv("GIT_DIRTY_EXCLUDE"); ok {
@@ -145,7 +139,128 @@ func applyEnv(cfg *Config) error {
 		cfg.Color = false
 	}
 
-	return nil
+	return cfg, nil
+}
+
+// Save writes cfg to the config file at path, keeping only the settings that
+// differ from Defaults(), so a later change of a default still reaches the
+// user. A symlinked file is followed and its target replaced, as dotfile
+// managers link it. The file is written beside its target and renamed over
+// it, so a failed save leaves the old file whole; an existing file keeps its
+// mode, a new one is 0600, and a missing directory is created.
+func Save(path string, cfg Config) error {
+	data, err := nonDefault(cfg)
+	if err != nil {
+		return err
+	}
+	target, err := resolve(path)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0o600)
+	if fi, err := os.Stat(target); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+
+	return replace(target, data, mode)
+}
+
+// nonDefault returns cfg as a JSON object holding only the keys whose values
+// differ from Defaults().
+func nonDefault(cfg Config) ([]byte, error) {
+	keys, err := jsonFields(cfg)
+	if err != nil {
+		return nil, err
+	}
+	defaults, err := jsonFields(Defaults())
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range keys {
+		if bytes.Equal(v, defaults[k]) {
+			delete(keys, k)
+		}
+	}
+	data, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+
+	return append(data, '\n'), nil
+}
+
+// jsonFields returns each JSON key of cfg with its compact encoding.
+func jsonFields(cfg Config) (map[string]json.RawMessage, error) {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+
+	return fields, json.Unmarshal(data, &fields)
+}
+
+// resolve returns the file a save replaces: path, or the target of path
+// when it is a symlink. The target need not exist: a dotfile manager can
+// link the config before the file is first written, which startup reads as
+// the defaults, and the save then creates it. A symlink cycle is an error
+// from EvalSymlinks, so the recursion ends.
+func resolve(path string) (string, error) {
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return path, nil // created at path
+	case err != nil:
+		return "", err
+	case fi.Mode()&os.ModeSymlink == 0:
+		return path, nil
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if !errors.Is(err, os.ErrNotExist) {
+		return target, err
+	}
+	link, err := os.Readlink(path)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(link) {
+		link = filepath.Join(filepath.Dir(path), link)
+	}
+
+	return resolve(link)
+}
+
+// replace writes data to a temporary file in target's directory and renames
+// it over target. The temporary file is removed on every error.
+func replace(target string, data []byte, mode os.FileMode) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			err = errors.Join(err, os.Remove(tmp.Name()))
+		}
+	}()
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Chmod(mode); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmp.Name(), target)
 }
 
 // envInt sets *dst from the variable name when it is set.
@@ -176,6 +291,21 @@ func envBool(name string, dst *bool) error {
 	*dst = b
 
 	return nil
+}
+
+// SplitList splits a comma-separated list, as -e and the settings page take
+// it: blanks around an item and empty items are dropped, as the bash script's
+// word splitting did. No items is an empty list, not nil, so a saved config
+// holds [] rather than null.
+func SplitList(s string) []string {
+	list := []string{}
+	for _, item := range strings.Split(s, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			list = append(list, item)
+		}
+	}
+
+	return list
 }
 
 // Normalize expands a leading ~ in Dir and validates the settings. main calls

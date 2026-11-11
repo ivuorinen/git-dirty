@@ -43,11 +43,18 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	cfg, err := config.Load()
+	// The flags apply on top of the config file, and -config names the file,
+	// so a first parse over the defaults finds it. A parse error is the same
+	// in both passes and is reported here.
+	pre, err := parseArgs(args, config.Defaults())
 	if err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
+		printf(stderr, "%s: %v\nRun '%s -h' for usage.\n", programName, err, programName)
 
-		return exitError
+		return exitUsage
+	}
+	cfgPath, cfg, err := loadConfig(pre.configPath)
+	if err != nil {
+		return fail(stderr, err)
 	}
 	opts, err := parseArgs(args, cfg)
 	if err != nil {
@@ -57,7 +64,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	switch {
 	case opts.help:
-		writeHelp(stdout, cfg)
+		writeHelp(stdout, cfg, cfgPath)
 
 		return exitOK
 	case opts.version:
@@ -67,32 +74,47 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	cfg = opts.cfg
 	if err := cfg.Normalize(); err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 	if err := checkDir(cfg.Dir); err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 	ex, err := gitstat.LoadExcludes()
 	if err != nil {
-		printf(stderr, "%s: git ignore configuration: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, fmt.Errorf("git ignore configuration: %w", err))
 	}
 	if useTUI(cfg.Interactive, os.Getenv("TERM"), isTerminal(stdin), isTerminal(stdout)) {
-		return runTUI(ctx, cfg, ex, stdin, stdout, stderr)
+		return runTUI(ctx, session{args: args, path: cfgPath, ex: ex}, stdin, stdout, stderr)
 	}
 
 	return runPlain(ctx, cfg, scanOptions(cfg, ex), stdout, stderr)
+}
+
+// loadConfig loads the config file in use, the -config value or else the
+// default location, and returns its path with the settings.
+func loadConfig(flagValue string) (path string, cfg config.Config, err error) {
+	path = flagValue
+	if path == "" {
+		if path, err = config.Path(); err != nil {
+			return "", cfg, err
+		}
+	}
+	cfg, err = config.Load(path)
+
+	return path, cfg, err
 }
 
 // printf writes to stdout or stderr. A failed write to either has nowhere
 // left to be reported, so the error is dropped here rather than at each call.
 func printf(w io.Writer, format string, a ...any) {
 	_, _ = fmt.Fprintf(w, format, a...)
+}
+
+// fail reports err on w and returns the exit code for it.
+func fail(w io.Writer, err error) int {
+	printf(w, "%s: %v\n", programName, err)
+
+	return exitError
 }
 
 // checkDir reports a scan root that is missing or not a directory.
@@ -112,29 +134,87 @@ func checkDir(dir string) error {
 	}
 }
 
+// session is what the browser's settings page needs to apply an edited
+// config file as startup did: the file's path, the command line, and the
+// git ignore configuration, read once.
+type session struct {
+	args []string
+	path string
+	ex   *gitstat.Excludes
+}
+
+// tuiConfig builds the browser's Config from the config file's layer: the
+// environment and the command line on top, then the same checks as at
+// startup.
+func (s session) tuiConfig(file config.Config) (tui.Config, error) {
+	cfg, err := s.overlay(file)
+	if err != nil {
+		return tui.Config{}, err
+	}
+	if err := cfg.Normalize(); err != nil {
+		return tui.Config{}, err
+	}
+	if err := checkDir(cfg.Dir); err != nil {
+		return tui.Config{}, err
+	}
+
+	return tui.Config{
+		Root:        cfg.Dir,
+		Scan:        scanOptions(cfg, s.ex),
+		Render:      renderOptions(cfg),
+		Filter:      tree.Filter{Verbose: cfg.Verbose, Depth: cfg.Depth},
+		Color:       cfg.Color,
+		ConfigPath:  s.path,
+		File:        file,
+		Overlay:     s.overlay,
+		Reconfigure: s.reconfigure,
+	}, nil
+}
+
+// reconfigure checks an edited file layer's own values before applying it:
+// with -m 4, a saved maxDepth of 0 would pass here and stop the next run
+// that has no flag. Whether its directory exists is not checked: a file's
+// dir, such as the default ~/Code, need not exist for someone who always
+// names a directory. Startup calls tuiConfig directly, so a bad value that
+// a flag overrides still runs as before.
+func (s session) reconfigure(file config.Config) (tui.Config, error) {
+	check := file
+	if err := check.Normalize(); err != nil {
+		return tui.Config{}, err
+	}
+
+	return s.tuiConfig(file)
+}
+
+// overlay applies the environment and the command line to the config file's
+// layer, before ~ in the directory is expanded.
+func (s session) overlay(file config.Config) (config.Config, error) {
+	cfg, err := config.ApplyEnv(file)
+	if err != nil {
+		return cfg, err
+	}
+	opts, err := parseArgs(s.args, cfg)
+
+	return opts.cfg, err
+}
+
 // runTUI shows the interactive browser until the user quits or a signal
 // arrives.
-func runTUI(
-	ctx context.Context,
-	cfg config.Config,
-	ex *gitstat.Excludes,
-	stdin io.Reader,
-	stdout, stderr io.Writer,
-) int {
-	err := tui.Run(ctx, tui.Config{
-		Root:   cfg.Dir,
-		Scan:   scanOptions(cfg, ex),
-		Render: renderOptions(cfg),
-		Filter: tree.Filter{Verbose: cfg.Verbose, Depth: cfg.Depth},
-		Color:  cfg.Color,
-	}, stdin, stdout)
+func runTUI(ctx context.Context, s session, stdin io.Reader, stdout, stderr io.Writer) int {
+	file, err := config.LoadFile(s.path)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	tc, err := s.tuiConfig(file)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	err = tui.Run(ctx, tc, stdin, stdout)
 	if ctx.Err() != nil {
 		return exitSignal
 	}
 	if err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 
 	return exitOK
@@ -191,9 +271,7 @@ func runPlain(ctx context.Context, cfg config.Config, so scan.Options, stdout, s
 		renderOptions(cfg),
 		color,
 	); err != nil {
-		printf(stderr, "%s: %v\n", programName, err)
-
-		return exitError
+		return fail(stderr, err)
 	}
 
 	return exitOK
@@ -255,9 +333,10 @@ func isTerminal(w any) bool {
 // options is the result of parsing the command line on top of the loaded
 // config.
 type options struct {
-	cfg     config.Config
-	help    bool
-	version bool
+	cfg        config.Config
+	configPath string // -config
+	help       bool
+	version    bool
 }
 
 // Short flags that take no value and short flags that take one, used to
@@ -267,8 +346,9 @@ const (
 	shortValues = "dem"
 )
 
-// longNames are the multi-letter flags; "-plain" must not be read as -p -l ...
-var longNames = map[string]bool{"plain": true, "version": true, "help": true}
+// longNames are the multi-letter flags; "-plain" must not be read as -p -l
+// ..., nor "-config" as -c -o ...
+var longNames = map[string]bool{"plain": true, "version": true, "help": true, "config": true}
 
 // expandShortFlags rewrites getopts-style clusters into one flag per argument:
 // -vac becomes -v -a -c, and -d3 becomes -d 3 (a value-taking letter consumes
@@ -281,7 +361,13 @@ func expandShortFlags(args []string) []string {
 		if arg == "--" {
 			return append(out, args[i:]...)
 		}
-		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		if n := configFlagArgs(args[i:]); n > 0 {
+			out = append(out, args[i:i+n]...)
+			i += n - 1
+
+			continue
+		}
+		if !isShortCluster(arg) {
 			out = append(out, arg)
 
 			continue
@@ -308,6 +394,23 @@ func expandShortFlags(args []string) []string {
 	return out
 }
 
+// configFlagArgs is how many arguments -config or --config takes at the
+// start of args, with its value, and 0 for any other argument. The value is
+// never expanded: in -config -d3, -d3 is a file name, as flag will read it.
+func configFlagArgs(args []string) int {
+	if args[0] != "-config" && args[0] != "--config" {
+		return 0
+	}
+
+	return min(2, len(args))
+}
+
+// isShortCluster reports whether arg is getopts-style short flags: one dash
+// and at least one letter.
+func isShortCluster(arg string) bool {
+	return len(arg) >= 2 && arg[0] == '-' && arg[1] != '-'
+}
+
 // expandCluster splits the letters after "-". takesNext reports that the last
 // letter is a value flag whose value is the next argument.
 func expandCluster(letters string) (expanded []string, takesNext, ok bool) {
@@ -331,22 +434,6 @@ func expandCluster(letters string) (expanded []string, takesNext, ok bool) {
 	return expanded, false, true
 }
 
-// excludeValue appends comma-separated names to the exclude list. Empty items
-// are skipped, as the bash script's word splitting did.
-type excludeValue struct{ list *[]string }
-
-func (e excludeValue) String() string { return "" }
-
-func (e excludeValue) Set(s string) error {
-	for _, item := range strings.Split(s, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			*e.list = append(*e.list, item)
-		}
-	}
-
-	return nil
-}
-
 func parseArgs(args []string, cfg config.Config) (options, error) {
 	opts := options{cfg: cfg}
 	c := &opts.cfg
@@ -355,6 +442,13 @@ func parseArgs(args []string, cfg config.Config) (options, error) {
 
 	fs := flag.NewFlagSet(programName, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	toggle := func(name string, b *bool) {
+		fs.BoolFunc(name, "", func(string) error {
+			*b = !*b
+
+			return nil
+		})
+	}
 	fs.BoolVar(&opts.help, "h", false, "")
 	fs.BoolVar(&opts.help, "help", false, "")
 	fs.BoolVar(&c.Verbose, "v", c.Verbose, "")
@@ -364,30 +458,23 @@ func parseArgs(args []string, cfg config.Config) (options, error) {
 
 		return nil
 	})
-	fs.BoolFunc("c", "", func(string) error {
-		c.Color = !c.Color
-
-		return nil
-	})
-	fs.BoolFunc("t", "", func(string) error {
-		c.Truncate = !c.Truncate
-
-		return nil
-	})
-	fs.BoolFunc("b", "", func(string) error {
-		c.ShowBranch = !c.ShowBranch
-
-		return nil
-	})
+	toggle("c", &c.Color)
+	toggle("t", &c.Truncate)
+	toggle("b", &c.ShowBranch)
 	fs.IntVar(&c.Depth, "d", c.Depth, "")
 	fs.IntVar(&c.MaxDepth, "m", c.MaxDepth, "")
-	fs.Var(excludeValue{&c.Exclude}, "e", "")
+	fs.Func("e", "", func(s string) error { // appends, so a repeated -e adds to the list
+		c.Exclude = append(c.Exclude, config.SplitList(s)...)
+
+		return nil
+	})
 	fs.BoolFunc("plain", "", func(string) error {
 		c.Interactive = false
 
 		return nil
 	})
 	fs.BoolVar(&opts.version, "version", false, "")
+	fs.StringVar(&opts.configPath, "config", "", "")
 
 	args = expandShortFlags(args)
 	var rest []string
@@ -435,11 +522,9 @@ func onOff(b bool) string {
 	return "off"
 }
 
-func writeHelp(w io.Writer, cfg config.Config) {
-	path, err := config.Path()
-	if err != nil {
-		path = "(unavailable: " + err.Error() + ")"
-	}
+// writeHelp prints the usage, with the defaults cfg gives and path, the
+// config file in use.
+func writeHelp(w io.Writer, cfg config.Config, path string) {
 	// One quoted string per line keeps the text's two-space indents out of
 	// the source indentation, which .editorconfig requires to be tabs.
 	const help = "Usage: %[1]s [OPTIONS] [DIRECTORY]\n" +
@@ -458,6 +543,8 @@ func writeHelp(w io.Writer, cfg config.Config) {
 		"  -t           Toggle path truncation (currently: %[5]s)\n" +
 		"  -b           Toggle branch name display (currently: %[6]s)\n" +
 		"  --plain      Print plain output instead of the interactive view\n" +
+		"  --config FILE\n" +
+		"               Read settings from FILE, and save them there, instead of the default file\n" +
 		"  --version    Print the version and exit\n" +
 		"\n" +
 		"Status indicators:\n" +

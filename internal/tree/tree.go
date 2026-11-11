@@ -19,7 +19,6 @@ type Node struct {
 	Repo     *gitstat.Result // nil for a plain directory
 	Worktree bool            // a linked worktree listed under its repository
 	children []*Node
-	sorted   bool
 }
 
 // Worktrees returns how many linked worktrees are listed under n, whether or
@@ -109,17 +108,13 @@ func (t *Tree) node(rel []string) *Node {
 		Rel:  slices.Clone(rel),
 	}
 	parent.children = append(parent.children, n)
-	parent.sorted = false
 	t.nodes[key] = n
 
 	return n
 }
 
 func (t *Tree) appendChildren(out *[]Line, n *Node, indent string, f Filter) {
-	if !n.sorted {
-		slices.SortFunc(n.children, func(a, b *Node) int { return strings.Compare(a.Name, b.Name) })
-		n.sorted = true
-	}
+	slices.SortFunc(n.children, func(a, b *Node) int { return strings.Compare(a.Name, b.Name) })
 	var shown []*Node
 	for _, c := range n.children {
 		if t.visible(c, f) {
@@ -140,13 +135,9 @@ func (t *Tree) appendChildren(out *[]Line, n *Node, indent string, f Filter) {
 // or could not be read: what the dirty filter keeps, and what turns a
 // directory's icon into a warning. Being behind is not a problem.
 func (n *Node) Problem() bool {
-	for _, c := range n.children {
-		if (c.Repo != nil && failing(c.Repo)) || c.Problem() {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(n.children, func(c *Node) bool {
+		return (c.Repo != nil && failing(c.Repo)) || c.Problem()
+	})
 }
 
 // failing is the dirty filter's test for one repository or worktree.
@@ -162,10 +153,8 @@ func (t *Tree) visible(n *Node, f Filter) bool {
 	if n.Repo != nil && (!f.DirtyOnly || failing(n.Repo)) {
 		return true
 	}
-	for _, c := range n.children {
-		if t.visible(c, f) {
-			return true
-		}
+	if slices.ContainsFunc(n.children, func(c *Node) bool { return t.visible(c, f) }) {
+		return true
 	}
 
 	return n.Repo == nil && f.Verbose && !f.DirtyOnly && len(n.Rel) <= f.Depth

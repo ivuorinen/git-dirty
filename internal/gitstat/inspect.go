@@ -9,8 +9,8 @@ import (
 type Options struct {
 	CheckUntracked bool
 	CheckStash     bool
-	MainBranches   []string  // branch names treated as the default when origin/HEAD is absent
-	Excludes       *Excludes // shared core.excludesFile patterns; may be nil
+	MainBranches   []string  // branch names treated as the default when refs/remotes/<remote>/HEAD is absent
+	Excludes       *Excludes // shared core.excludesFile patterns
 }
 
 // Status holds the dirty-state letters.
@@ -25,7 +25,6 @@ type Status struct {
 // repository, of which only Bare is known. When Err is set, the fields
 // filled before the failing stage are still valid.
 type Result struct {
-	Path     string
 	Bare     bool // no working tree; nothing past the open stage is inspected
 	Head     Head
 	Status   Status
@@ -48,7 +47,7 @@ func (r Result) Dirty() bool {
 // an error directly: failures are recorded in Result.Err, prefixed with the
 // stage.
 func Inspect(ctx context.Context, path string, opts Options) Result {
-	res := Result{Path: path}
+	var res Result
 	res.Err = inspect(ctx, path, opts, &res)
 
 	return res
@@ -90,11 +89,8 @@ func (r *Repo) inspectStatus(ctx context.Context, opts Options, res *Result) err
 	if err != nil {
 		return fmt.Errorf("index: %w", err)
 	}
-	cc, err := r.coreConfig()
-	if err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	if res.Status.Modified, err = r.modified(ctx, idx, cc, opts.Excludes); err != nil {
+	cc := r.coreConfig()
+	if res.Status.Modified, err = r.modified(ctx, idx, cc); err != nil {
 		return fmt.Errorf("modified: %w", err)
 	}
 	if res.Status.Staged, err = r.staged(ctx, idx, res.Head.Hash); err != nil {
@@ -121,13 +117,12 @@ func (r *Repo) inspectTracking(ctx context.Context, opts Options, res *Result) e
 	if err != nil {
 		return fmt.Errorf("shallow: %w", err)
 	}
-	cfg := r.repo.Config
 	if !res.Head.Detached() {
-		if res.Upstream, err = r.upstream(ctx, w, cfg, res.Head.Branch, res.Head.Hash); err != nil {
+		if res.Upstream, err = r.upstream(ctx, w, res.Head.Branch, res.Head.Hash); err != nil {
 			return fmt.Errorf("ahead/behind: %w", err)
 		}
 	}
-	if res.Default, err = r.defaultBranch(ctx, w, cfg, res.Head, opts.MainBranches); err != nil {
+	if res.Default, err = r.defaultBranch(ctx, w, res.Head, opts.MainBranches); err != nil {
 		return fmt.Errorf("default branch: %w", err)
 	}
 

@@ -202,7 +202,7 @@ func ParseTree(data []byte, f Format) ([]TreeEntry, error) {
 		if len(data) < f.Size {
 			return nil, errors.New("tree entry: truncated id")
 		}
-		id, _ := f.IDFromBytes(data[:f.Size])
+		id := f.IDFromBytes(data[:f.Size])
 		data = data[f.Size:]
 		entries = append(entries, TreeEntry{Mode: canonMode(uint32(mode)), Name: name, ID: id})
 	}

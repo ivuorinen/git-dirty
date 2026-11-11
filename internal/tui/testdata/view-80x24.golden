@@ -1,10 +1,10 @@
 git-dirty  /home/u/Code
 Found 3 git repositories in 0.75s
-⚠️ /home/u/Code
-├── 🪵 bare.git (1 worktree)
-│   └── 🌳 ✅ wt
-├── ✅ clean
-└── ❌ dirty [M] (feature, no upstream)
+> ⚠️ /home/u/Code
+  ├── 🪵 bare.git (1 worktree)
+  │   └── 🌳 ✅ wt
+  ├── ✅ clean
+  └── ❌ dirty [M] (feature, no upstream)
 
 
 
@@ -21,4 +21,4 @@ Found 3 git repositories in 0.75s
 
 
 
-f dirty only • b branch names • r rescan • ? help • q quit
+d dirty only • b branch names • r rescan • ? help • q quit

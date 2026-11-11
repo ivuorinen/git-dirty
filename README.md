@@ -14,7 +14,7 @@ checked-out branch has diverged from the default branch.
 │   │   └── 🌳 ⚠️ old ! worktree: gitdir file points to non-existent location
 │   ├── ✅ dotfiles ↓3
 │   ├── ❌ gh-history ↑1
-│   └── ⚠️ broken ! index: unknown extension
+│   └── ⚠️ broken ! index: unsupported index extension "sdir"
 ├── 🪵 plain.git (2 worktrees)
 │   ├── 🌳 ❌ plain-feat [M] (feat, no upstream) · vs main ↑1 ↓0
 │   └── 🌳 ✅ plain-main
@@ -25,13 +25,15 @@ checked-out branch has diverged from the default branch.
 ```
 
 It is a single static binary. It reads git's on-disk formats itself (config,
-refs, the index, loose objects and packs, in SHA-1 and SHA-256 repositories)
-and never runs `git`, hooks, filters or `core.fsmonitor`. It makes no network
-requests: ahead/behind counts are measured against the remote-tracking refs as
-of your last fetch.
+refs, the index, loose objects and packs, in SHA-1 and SHA-256 repositories),
+and the scan never runs `git`, hooks, filters or `core.fsmonitor`. The scan
+makes no network requests: ahead/behind counts are measured against the
+remote-tracking refs as of your last fetch. The browser's fetch and pull keys
+are the exception: they run `git` in the selected repository ([Actions](#actions)).
 
-On a terminal it opens an interactive browser. When its output is piped, or
-with `--plain`, it prints the report.
+When stdin and stdout are terminals and `TERM` is not `dumb`, it opens an
+interactive browser. Otherwise, or with `--plain` or `"interactive": false`,
+it prints the report.
 
 ## Install
 
@@ -67,6 +69,7 @@ git-dirty [OPTIONS] [DIRECTORY]
 | `-b` | Toggle branch names (counts are always shown) |
 | `-p` | Accepted for compatibility; scanning is always parallel |
 | `--plain` | Print the report instead of opening the interactive browser |
+| `--config FILE` | Read settings from FILE, and save them there, instead of the default file |
 | `--version` | Print the version and exit |
 
 Short flags can be bundled as with the old script (`-vac`, `-d3`), and flags
@@ -83,10 +86,10 @@ a usage error, 130 when interrupted.
 | --- | --- |
 | ✅ / ❌ | Clean / dirty. Dirty means any status letter is set, or there are commits not pushed to the upstream. Being behind does not make a repository dirty. |
 | 📁 | A directory that is not a repository, with no dirty or unreadable repository or worktree anywhere below it. Repositories that are only behind their upstream do not change it. |
-| ⚠️ | A repository that could not be read (`! <error>`), or a directory with a dirty or unreadable repository or worktree below it: the directories the `f` view keeps |
+| ⚠️ | A repository that could not be read (`! <error>`), or a directory with a dirty or unreadable repository or worktree below it: the directories the `d` view keeps |
 | 🌳 | A linked worktree (`git worktree add`), listed under its repository, before its own ✅, ❌ or ⚠️ and the parts below. Its name is its ID under `.git/worktrees/` (`<bare>/worktrees/` for a bare repository), which git takes from the directory name. |
 | 🪵 | A bare repository: a git directory with no working tree, such as one made by `git clone --bare`, or a `.git` whose config sets `core.bare = true`. It has no status letters, branch or ✅/❌; its linked worktrees are listed under it, marked 🌳. |
-| `(N worktrees)` | After 🪵, how many linked worktrees the bare repository records, stale ones included. It stays the same when `f` hides some. When they cannot be listed, `! worktrees: <error>` replaces it. |
+| `(N worktrees)` | After 🪵, how many linked worktrees the bare repository records, stale ones included. It stays the same when `d` hides some. When they cannot be listed, `! worktrees: <error>` replaces it. |
 | `M` | Worktree differs from the index (`git diff --quiet` would fail) |
 | `S` | Index differs from HEAD (`git diff --cached --quiet` would fail) |
 | `?` | Untracked files that are not ignored (on by default; `GIT_DIRTY_CHECK_UNTRACKED=0` turns it off) |
@@ -94,7 +97,7 @@ a usage error, 130 when interrupted.
 | `(name ↑a ↓b)` | Current branch and its commits ahead of / behind its upstream. Zero counts are omitted. `no upstream` and `upstream gone` explain missing counts. On a detached HEAD, the exact tag or the short hash replaces the name. |
 | bare `↑a ↓b` | The same counts for a branch in the main-branch list, whose name is hidden |
 | `· main ↓4` | The local default branch against its own upstream. Shown only when not on the default branch and a count is non-zero. |
-| `· vs main ↑5 ↓1` | The checked-out commit against the default branch (`origin/main` when it exists, else the local `main`). Always shown, with both counts, when not on the default branch. |
+| `· vs main ↑5 ↓1` | The checked-out commit against the default branch (`<remote>/main`, with the remote chosen as described below, when it exists, else the local `main`). Always shown, with both counts, when not on the default branch. |
 
 The default branch is what `refs/remotes/<remote>/HEAD` points at, using the
 current branch's remote or `origin`. Without that ref, it is the first branch
@@ -104,15 +107,79 @@ in the main-branch list that exists locally.
 
 | Key | Action |
 | --- | --- |
-| `↑`/`k`, `↓`/`j`, `pgup`, `pgdn`/`space` | Scroll |
-| `g`/`home`, `G`/`end` | Top, bottom |
-| `f` | Show only dirty or failed repositories |
+| `↑`/`k`, `↓`/`j` | Move the cursor one line |
+| `pgup`, `pgdn`/`space` | Move the cursor one page |
+| `g`/`home`, `G`/`end` | First, last line |
+| `←`/`h`, `→`/`l` | Scroll sideways |
+| `d` | Show only dirty or failed repositories |
 | `b` | Toggle branch names |
 | `r` | Rescan |
+| `f` | `git fetch --all` in the selected repository |
+| `F` | `git fetch --all --prune` in the selected repository, after y/n |
+| `p` | `git pull --ff-only --autostash` in the selected repository |
+| `P` | `git pull --rebase=true` in the selected repository, after y/n |
+| `m` | [Mass actions](#mass-actions): one of the four on every listed repository |
+| `s` | [Settings](#settings-page): edit the config file |
 | `?` | Full help |
-| `q`/`ctrl+c` | Quit |
+| `q` | Quit; asks first while an action runs |
+| `ctrl+c` | Quit at once |
 
-The browser is read-only: it never changes a repository.
+### Actions
+
+`f`, `F`, `p` and `P` run `git` in the repository under the cursor. The
+uppercase key is the destructive variant of the lowercase one and asks first.
+
+| Key | Runs | Runs on |
+| --- | --- | --- |
+| `f` | `git fetch --all` | A repository, a worktree or a bare repository |
+| `F` | `git fetch --all --prune`: also deletes remote-tracking branches the remote no longer has | The same |
+| `p` | `git pull --ff-only --autostash`: fast-forwards only, stashing uncommitted changes and reapplying them | A working tree on a branch with an upstream that exists |
+| `P` | `git pull --rebase=true`: rebases the branch's own commits onto the upstream | The same |
+
+- One action runs at a time, never during a scan, and a rescan follows each
+  one. The status line shows `ok` or git's last line. On any other line, the
+  status line says why nothing ran, such as `pull: HEAD is detached`.
+- git runs in the repository's directory, with no terminal, stdin on the null
+  device, `GIT_TERMINAL_PROMPT=0`, and without git's repository-local
+  variables (`GIT_DIR`, `GIT_WORK_TREE` and the others
+  `git rev-parse --local-env-vars` lists). Nothing can be typed in the TUI: a
+  remote needs ssh-agent, a credential helper or an askpass program
+  (`GIT_ASKPASS`, `SSH_ASKPASS`, `core.askPass`), which opens its own window
+  and holds the action until it is answered. Without one, a key passphrase,
+  an unknown host key or a password prompt makes the action fail with git's
+  message.
+- It is git, run as you would run it in that directory: the repository's
+  hooks, `core.fsmonitor`, `core.sshCommand` and credential helpers run, and
+  `safe.directory` and `safe.bareRepository` apply. Run actions only in
+  repositories you trust.
+- `p` on a branch that has diverged from its upstream fails, and the branch
+  and working tree stay as they were; its fetch can still update
+  remote-tracking branches and `FETCH_HEAD`. `P` with uncommitted changes
+  fails unless `rebase.autoStash` is set. An autostash that conflicts when it
+  is reapplied leaves the changes in `git stash list`.
+- `q` asks first while an action runs, because quitting interrupts git: an
+  interrupted `P` can leave a rebase in progress (`git rebase --abort`).
+
+### Mass actions
+
+`m` opens a menu of the same four actions, each with how many listed
+repositories it would run on. What is listed is what runs: with `d` on, only
+the dirty and unreadable repositories. A fetch skips a worktree listed under
+its repository, because the repository's fetch updates the worktree's
+remote-tracking branches; a pull skips every repository `p` would refuse.
+
+Choosing an action opens its warning page: what the action changes, how many
+repositories it runs on, how many of them are bare, and how many are skipped
+and why. `y` starts the run and `esc` goes back.
+
+The run goes one repository at a time, in the order listed: worktrees of one
+repository share its refs and lock files. A grid shows one cell per
+repository: `□` waiting, `▣` running, `■` done, and a failure as a red `■`,
+or `✗` without color. `esc` stops the run after the running repository. When
+the run ends, each failure is listed with git's last line, `↑`/`↓` scroll
+the list when it does not fit the window, and `enter` or `esc` goes back to
+the tree and rescans. Without git on `PATH`, the run ends
+at its first repository.
 
 ## Configuration
 
@@ -120,8 +187,9 @@ Settings are read from, lowest to highest precedence: built-in defaults, the
 config file, environment variables, then flags.
 
 The config file is `$XDG_CONFIG_HOME/git-dirty/config.json`
-(`~/.config/git-dirty/config.json` when `XDG_CONFIG_HOME` is unset). Unknown
-keys are an error. Every key is optional:
+(`~/.config/git-dirty/config.json` when `XDG_CONFIG_HOME` is unset), or the
+file `--config FILE` names. A missing file means the defaults; `-h` shows the
+file in use. Unknown keys are an error. Every key is optional:
 
 ```json
 {
@@ -173,7 +241,30 @@ the scan. A worktree whose directory was deleted shows ⚠️ with git's wording
 removes it. Worktrees are not counted in "Found N git repositories".
 
 Ignore rules follow git's: `core.excludesFile` (default
-`~/.config/git/ignore`), `.git/info/exclude`, and every `.gitignore`.
+`$XDG_CONFIG_HOME/git/ignore`, `~/.config/git/ignore` when that is unset),
+`.git/info/exclude`, and every `.gitignore`.
+
+### Settings page
+
+`s` in the browser opens the config file's settings as a form: every key
+except `interactive`, which only `--plain` turns off, so saving it off would
+leave editing the file as the only way back. The form shows the file's
+values, not the environment's or the flags'; a row that one of them
+overrides also shows `overridden:` and the value in effect.
+
+`↑`/`↓` choose a row and `enter` toggles a true/false row or edits the
+others: type, paste or backspace, then `enter` keeps the value and `esc`
+drops it. `exclude` and `mainBranches` are comma separated, as `-e` takes
+them. `ctrl+s` checks the form's values, then the settings in effect as
+startup does (a missing directory is an error, unless the environment or a
+directory argument names another one), writes the file and rescans with
+them; on an error nothing is written. `esc` leaves the page and drops
+unsaved edits.
+
+A save writes only the keys whose values differ from the defaults, so a
+later change of a default reaches you; a hand-written key equal to its
+default is dropped. A symlinked config file stays a symlink and its target
+is replaced. The file keeps its mode, and a new one is created `0600`.
 
 ## Differences from the bash script
 
@@ -183,9 +274,9 @@ Ignore rules follow git's: `core.excludesFile` (default
 | The sourced config file overrides environment variables | Environment variables override the config file |
 | Indented list | Tree drawn with `├──`, `└──` and `│` |
 | `↑` letter for unpushed commits | Explicit `↑N ↓N` counts, plus the default-branch comparisons |
-| `-p` needs GNU parallel | `-p` is accepted and ignored; work is always concurrent |
+| `-p` uses GNU parallel when installed, else its own parallel jobs | `-p` is accepted and ignored; work is always concurrent |
 | `-d` is documented but not used | `-d` limits the depth of non-repository directories under `-v` |
-| `-t` has no visible effect | `-t` off prints full paths |
+| `-t` has no visible effect without `-p`; with it, it only deepens the indentation | `-t` off prints full paths |
 | Stash check reads the loose `refs/stash` file only | Packed refs are found too |
 | A linked worktree is listed only where the scan finds it, as a repository | Every linked worktree is listed under its repository, marked 🌳 |
 | A bare repository's folder is walked into, and its worktrees are listed on their own | A bare repository is listed with 🪵, its worktrees under it |
@@ -195,8 +286,8 @@ Ignore rules follow git's: `core.excludesFile` (default
 
 - Content filters such as `core.autocrlf` and Git LFS are not applied. A file
   whose timestamp changed without a content change can show as `M` until
-  `git status` refreshes the index. The tool is read-only, so it cannot
-  refresh the index itself.
+  `git status` refreshes the index. The scan does not write to repositories,
+  so it cannot refresh the index itself.
 - Files marked `git update-index --assume-unchanged` are still checked.
 - Split-index and SHA-256 repositories are supported. A sparse index is not,
   and is shown as `! index: unsupported index extension "sdir"`; neither are
@@ -207,19 +298,21 @@ Ignore rules follow git's: `core.excludesFile` (default
 - `[include]` and `[includeIf]` in git config files are not followed.
 - Per-worktree config (`extensions.worktreeConfig`, `config.worktree`) is read
   for `core.bare` only, which decides whether a repository is listed as bare
-  (🪵); its other settings are not read. A repository with
-  `extensions.relativeWorktrees` is refused as an unknown extension.
+  (🪵); its other settings are not read.
 - `core.worktree` is not read: a git directory that names its working tree
   with it is listed as bare (🪵), where git would use that working tree.
 - A git directory made with `--separate-git-dir` (`git init` or `git clone`)
   is listed as bare (🪵) when the scan reaches it, and its working tree is
   listed on its own: the git directory does not record where its working
   tree is, so the two cannot be joined.
-- `safe.bareRepository` is not read. git uses it to refuse bare repositories
-  found inside other folders, because git runs configuration and hooks from a
-  repository; git-dirty runs nothing, and lists every bare repository it finds.
+- `safe.bareRepository` is not read by the scan. git uses it to refuse bare
+  repositories found inside other folders, because git runs configuration and
+  hooks from a repository; the scan runs nothing, and lists every bare
+  repository it finds. The fetch keys run git, which applies it.
 - 🪵 (U+1FAB5) is a Unicode 13 emoji. A terminal whose emoji font predates it
   prints a box in its place.
+- The mass-action grid's `□ ▣ ■` are East Asian ambiguous width: a terminal
+  that draws them two columns wide misaligns the grid.
 
 ## Development
 

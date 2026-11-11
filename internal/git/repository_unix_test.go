@@ -131,3 +131,46 @@ func TestIsGitDir_FIFOHead(t *testing.T) {
 		t.Fatal("IsGitDir blocked on a FIFO HEAD")
 	}
 }
+
+// A .gitignore is not followed when it is a symlink, as in git since 2.32: a
+// clone could point one at a FIFO, whose open blocks, or at a device that
+// never ends. A FIFO fails this test by hanging; /dev/zero would use up the
+// machine's memory.
+func TestReadGitignore_Symlinks(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "real", "*.log\n")
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip(err)
+	}
+	for _, target := range []string{"real", fifo} {
+		link := filepath.Join(t.TempDir(), ".gitignore")
+		if err := os.Symlink(filepath.Join(dir, filepath.Base(target)), link); err != nil {
+			t.Fatal(err)
+		}
+		if ps := ReadGitignore(link, nil); len(ps) != 0 {
+			t.Errorf("a link to %s was followed: %v", target, ps)
+		}
+	}
+}
+
+// core.excludesFile can come from a repository's config: a FIFO must not
+// block the scan. A symlink to a regular file is followed, as git does.
+func TestReadPatterns_FollowsOnlyToARegularFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "real", "*.log\n")
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(filepath.Join(dir, "real"), link); err != nil {
+		t.Fatal(err)
+	}
+	if ps, err := ReadPatterns(link, nil); err != nil || len(ps) != 1 {
+		t.Errorf("link to a file: %v, %v, want one pattern", ps, err)
+	}
+	if ps, err := ReadPatterns(fifo, nil); err != nil || len(ps) != 0 {
+		t.Errorf("a FIFO: %v, %v, want no patterns and no error", ps, err)
+	}
+}

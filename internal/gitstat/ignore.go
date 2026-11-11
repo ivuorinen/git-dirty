@@ -3,6 +3,7 @@ package gitstat
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	gitrepo "github.com/ivuorinen/git-dirty/internal/git"
@@ -111,12 +112,7 @@ func expandHome(p, home string) string {
 // the global one), then info/exclude. Matching folds case when
 // core.ignorecase is set, as git does.
 func (r *Repo) rootIgnores(ex *Excludes) (ignoreStack, error) {
-	var ps []gitrepo.Pattern
-	path := ""
-	if ex != nil {
-		path = ex.path
-		ps = ex.patterns
-	}
+	path, ps := ex.path, ex.patterns
 	cfg := r.repo.Config
 	override := false
 	if v, _ := cfg.Get("core", "", "excludesfile"); v != "" {
@@ -138,33 +134,24 @@ func (r *Repo) rootIgnores(ex *Excludes) (ignoreStack, error) {
 	if err != nil {
 		return ignoreStack{}, err
 	}
-	all := make([]gitrepo.Pattern, 0, len(ps)+len(info))
-	all = append(append(all, ps...), info...)
+	m := gitrepo.Matcher{Patterns: slices.Concat(ps, info), IgnoreCase: cfg.Bool("core", "", "ignorecase", false)}
 
-	return ignoreStack{patterns: all, ignoreCase: cfg.Bool("core", "", "ignorecase", false)}, nil
+	return ignoreStack{m}, nil
 }
 
 // ignoreStack holds the patterns in effect for one directory while walking.
 // push never modifies the receiver's slice, so siblings cannot see each
 // other's .gitignore rules.
-type ignoreStack struct {
-	patterns   []gitrepo.Pattern
-	ignoreCase bool
-}
+type ignoreStack struct{ gitrepo.Matcher }
 
 // push adds the .gitignore in dirAbs, whose path relative to the worktree is
 // domain.
-func (s ignoreStack) push(dirAbs string, domain []string) (ignoreStack, error) {
-	ps, err := gitrepo.ReadPatterns(filepath.Join(dirAbs, ".gitignore"), domain)
-	if err != nil || len(ps) == 0 {
-		return s, err
+func (s ignoreStack) push(dirAbs string, domain []string) ignoreStack {
+	ps := gitrepo.ReadGitignore(filepath.Join(dirAbs, ".gitignore"), domain)
+	if len(ps) == 0 {
+		return s
 	}
-	all := make([]gitrepo.Pattern, 0, len(s.patterns)+len(ps))
-	all = append(append(all, s.patterns...), ps...)
+	s.Patterns = slices.Concat(s.Patterns, ps) // a new slice; s is the caller's copy
 
-	return ignoreStack{patterns: all, ignoreCase: s.ignoreCase}, nil
-}
-
-func (s ignoreStack) match(path []string, isDir bool) bool {
-	return gitrepo.Matcher{Patterns: s.patterns, IgnoreCase: s.ignoreCase}.Ignored(path, isDir)
+	return s
 }

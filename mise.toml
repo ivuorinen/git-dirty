@@ -9,7 +9,8 @@ idiomatic_version_file_enable_tools = ["go"]
 
 # Renovate's mise manager bumps these, so a version change is always a commit.
 #
-# govulncheck is built from source with the go.mod toolchain (the go: backend).
+# govulncheck and gobco are built from source with the go.mod toolchain (the
+# go: backend).
 # golangci-lint is the prebuilt release: it must be built with at least the Go
 # version of the code it checks, so check `golangci-lint version` when go.mod's
 # toolchain moves ahead of it (2.15.0 is built with go1.27.0).
@@ -25,6 +26,9 @@ idiomatic_version_file_enable_tools = ["go"]
 # tests' --format=%(objectmode). Windows keeps the git on its PATH, as CI's
 # Windows job does.
 "conda:git" = { version = "2.56.0", os = ["linux", "macos"] }
+# Condition coverage (test-cov): whether each condition was seen both true and
+# false, which go test -cover's statement count cannot tell.
+"go:github.com/rillig/gobco" = "1.3.4"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.9.0"
 golangci-lint = "2.15.0"
 goreleaser = "2.20.0"
@@ -59,9 +63,30 @@ description = "Run all tests with the oldest supported git"
 tools = { "conda:git" = { version = "2.39.2", os = ["linux", "macos"] } }
 run = "go test ./..."
 
+# Statement coverage first, then gobco's condition coverage, which is meant to
+# go with it: gobco cannot see a function that has no conditions.
+#
+# gobco takes one package per run: for ./... it prints "nothing to instrument"
+# and exits 0. So the task runs it per package, and assigns the list first
+# because errexit does not see go list fail in a for loop's list. gobco also
+# type-checks every file in a directory whatever its build constraints
+# (rillig/gobco#40), where proc_windows.go redeclares what proc_unix.go
+# declares, and it has no option to skip a file. So it runs in a copy without
+# that file, and without what it would otherwise copy again for each package.
 [tasks.test-cov]
-description = "Run tests with a coverage summary"
-run = "go test -cover ./..."
+description = "Run tests with statement coverage (go test -cover) and condition coverage (gobco)"
+run = '''
+go test -cover ./...
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+cp -R . "$tmp"
+rm -rf "$tmp/.git" "$tmp/dist" "$tmp/internal/action/proc_windows.go"
+cd "$tmp"
+pkgs=$(go list -f '.{% raw %}{{slice .ImportPath (len .Module.Path)}}{% endraw %}' ./...)
+for pkg in $pkgs; do
+  gobco "$pkg"
+done
+'''
 
 # .golangci.yml sets `fix: true`; the check overrides it, so CI fails on an
 # issue instead of fixing a checkout nobody commits.
@@ -105,17 +130,11 @@ run = "prek install"
 description = "Scan for reachable vulnerabilities with govulncheck"
 run = "govulncheck ./..."
 
+# The targets are .goreleaser.yaml's builds, so the list lives in one place.
+# --skip=before leaves out the release's go mod tidy and license notices.
 [tasks.build-all]
-description = "Cross-compile for common platforms into dist/"
-run = '''
-for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-  os=${target%/*}
-  arch=${target#*/}
-  ext=""
-  if [ "$os" = windows ]; then ext=.exe; fi
-  GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "dist/git-dirty-$os-$arch$ext" .
-done
-'''
+description = "Cross-compile the release targets into dist/"
+run = "goreleaser build --snapshot --clean --skip=before"
 
 # Warm-cache comparison with the bash script it replaces (scripts/git-dirty.sh),
 # written to bench.md (gitignored). hyperfine discards the commands' output, so

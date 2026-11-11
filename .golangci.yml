@@ -81,12 +81,13 @@ linters:
     goconst:
       min-len: 2
       min-occurrences: 3
-    # CLAUDE.md: git-dirty never executes git or anything else at runtime.
+    # CLAUDE.md: only internal/action runs a program, and only git, from its
+    # one call site in run.go, which carries a //nolint:forbidigo reason.
     # Tests may, since the git CLI is their oracle (exempted below).
     forbidigo:
       forbid:
         - pattern: '^exec\.Command(Context)?$'
-          msg: "git-dirty never executes programs at runtime; only tests may run git (CLAUDE.md)"
+          msg: "only internal/action runs a program (git, from run.go); only tests may run git elsewhere (CLAUDE.md)"
     # CLAUDE.md: internal/git imports the standard library only.
     depguard:
       rules:

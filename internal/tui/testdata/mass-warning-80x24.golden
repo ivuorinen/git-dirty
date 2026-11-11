@@ -1,0 +1,15 @@
+git-dirty  /home/u/Code
+Found 5 git repositories in 0.75s
+
+fetch --all --prune on 5 repositories
+
+Downloads new commits from every remote, updates the remote-tracking branches,
+and deletes each remote-tracking branch whose branch the remote no longer has.
+
+One repository at a time, in the order listed; this can take a long time.
+git runs each repository's hooks and helpers, as it does in a terminal.
+Bare repositories: 1.
+Skipped: 2 worktree, fetched with its repository.
+
+Start? y yes • esc back
+

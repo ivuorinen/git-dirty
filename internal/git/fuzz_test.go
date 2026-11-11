@@ -167,7 +167,7 @@ func FuzzPackEntryAndDelta(f *testing.F) {
 // git-generated seed would rerun git in every fuzz worker process.
 func idxSeed(id ObjectID, large bool) []byte {
 	idx := []byte("\377tOc\x00\x00\x00\x02")
-	key := id.Bytes()
+	key := id.b[:id.n]
 	for i := range 256 {
 		n := uint32(0)
 		if i >= int(key[0]) {

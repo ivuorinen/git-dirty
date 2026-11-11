@@ -49,6 +49,21 @@ func TestHead(t *testing.T) {
 			wantDetached: true,
 		},
 		{
+			name: "detached on two tags",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := newRepo(t)
+				git(t, dir, "tag", "v2")
+				git(t, dir, "tag", "v1")
+				commitFile(t, dir, "b.txt", "b\n", "next")
+				git(t, dir, "switch", "-q", "--detach", "v1")
+
+				return dir
+			},
+			want:         gitLabel("describe", "--tags", "--exact-match"),
+			wantDetached: true,
+		},
+		{
 			name: "detached on annotated tag",
 			setup: func(t *testing.T) string {
 				t.Helper()
@@ -56,6 +71,36 @@ func TestHead(t *testing.T) {
 				git(t, dir, "tag", "-a", "-m", "release", "v2")
 				commitFile(t, dir, "b.txt", "b\n", "next")
 				git(t, dir, "switch", "-q", "--detach", "v2")
+
+				return dir
+			},
+			want:         gitLabel("describe", "--tags", "--exact-match"),
+			wantDetached: true,
+		},
+		{
+			name: "detached on a packed annotated tag",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := newRepo(t)
+				git(t, dir, "tag", "-a", "-m", "release", "v3")
+				git(t, dir, "pack-refs", "--all")
+				commitFile(t, dir, "b.txt", "b\n", "next")
+				git(t, dir, "switch", "-q", "--detach", "v3")
+
+				return dir
+			},
+			want:         gitLabel("describe", "--tags", "--exact-match"),
+			wantDetached: true,
+		},
+		{
+			name: "detached, a tag sorted first names another commit",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := newRepo(t)
+				git(t, dir, "tag", "a-older")
+				commitFile(t, dir, "b.txt", "b\n", "next")
+				git(t, dir, "tag", "z-here")
+				git(t, dir, "switch", "-q", "--detach", "z-here")
 
 				return dir
 			},

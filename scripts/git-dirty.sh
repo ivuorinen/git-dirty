@@ -2,12 +2,12 @@
 #USAGE about "Recursively check for dirty git repositories"
 #USAGE flag "-h" help="Show help"
 #USAGE flag "-v" help="Verbose output"
-#USAGE flag "-p" help="Process directories in parallel (requires parallel)"
+#USAGE flag "-p" help="Process directories in parallel (GNU parallel when installed)"
 #USAGE flag "-a" help="Show all status details (stash, untracked)"
 #USAGE flag "-c" help="Toggle colorized output"
 #USAGE flag "-t" help="Toggle path truncation"
 #USAGE flag "-b" help="Toggle branch name display"
-#USAGE flag "-d <num>" help="Maximum depth for showing non-git directories"
+#USAGE flag "-d <num>" help="Accepted; has no effect"
 #USAGE flag "-e <patterns>" help="Additional patterns to exclude (comma separated)"
 #USAGE flag "-m <num>" help="Maximum recursion depth"
 #USAGE arg "[directory]" help="Directory to check"
@@ -25,7 +25,7 @@
 # to the `.git` folder. ProTip: Add `.ignore` to your global `.gitignore`.
 #
 # The script automatically skips folders:
-#   node_modules, vendor
+#   node_modules, vendor, .cache, build, dist, .tests, .test (GIT_DIRTY_EXCLUDE)
 #
 # Copyright Ismo Vuorinen (2023)
 # Licensed under the MIT License
@@ -971,8 +971,8 @@ Recursively check git repository status
 
 Options:
   -h           Show this help message and exit
-  -d NUM       Set maximum depth for showing non-git directories (default: $GIT_DIRTY_DEPTH)
-  -p           Process directories in parallel (requires 'parallel' command)
+  -d NUM       Accepted; has no effect (default: $GIT_DIRTY_DEPTH)
+  -p           Process directories in parallel (GNU parallel when installed)
   -v           Enable verbose output
   -a           Show all status details (stash, untracked, etc.)
   -e PATTERNS  Additional patterns to exclude (comma separated)
@@ -990,7 +990,7 @@ Status indicators:
 
 Example:
   $bin ~/Projects
-  $bin -d 3 -e 'build,dist' ~/Code
+  $bin -m 3 -e 'build,dist' ~/Code
 EOF
 }
 

@@ -1,0 +1,14 @@
+git-dirty  /home/u/Code
+Found 5 git repositories in 0.75s
+
+fetch --all: 5/5 done, 1 failed
+
+■ ✗ ■ ■ ■
+
+finished
+
+Failed:
+/home/u/Code/detached: fatal: could not read from remote
+
+enter or esc back
+

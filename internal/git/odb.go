@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 )
 
@@ -42,7 +41,6 @@ type odb struct {
 func (r *Repository) objects() *odb {
 	if r.odb == nil {
 		r.odb = &odb{dir: filepath.Join(r.CommonDir, "objects"), f: r.Format}
-		r.odb.cache.limit = baseCacheBytes
 	}
 
 	return r.odb
@@ -74,15 +72,11 @@ func (o *odb) loadPacks() error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	var idxFiles []string
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".idx" && e.Type().IsRegular() {
-			idxFiles = append(idxFiles, e.Name())
+	for _, e := range entries { // ReadDir sorts by name
+		if filepath.Ext(e.Name()) != ".idx" || !e.Type().IsRegular() {
+			continue
 		}
-	}
-	sort.Strings(idxFiles)
-	for _, name := range idxFiles {
-		p, err := openPack(filepath.Join(o.dir, "pack", name), o.f)
+		p, err := openPack(filepath.Join(o.dir, "pack", e.Name()), o.f)
 		if err != nil {
 			_ = o.close() // read-only files; the open error is the one to report
 
@@ -289,18 +283,12 @@ func readExact(r io.Reader, size uint64) ([]byte, error) {
 		return nil, fmt.Errorf("content shorter than its declared %d bytes: %w", size, err)
 	}
 	var extra [1]byte
-	n, err := r.Read(extra[:])
+	n, err := io.ReadFull(r, extra[:])
 	if n > 0 {
 		return nil, fmt.Errorf("content longer than its declared %d bytes", size)
 	}
-	if err != nil && !errors.Is(err, io.EOF) {
+	if !errors.Is(err, io.EOF) {
 		return nil, err
-	}
-	if err == nil {
-		// A reader may return 0, nil before EOF; one more read settles it.
-		if n, err = r.Read(extra[:]); n > 0 || (err != nil && !errors.Is(err, io.EOF)) {
-			return nil, fmt.Errorf("content longer than its declared %d bytes", size)
-		}
 	}
 
 	return data, nil
@@ -309,7 +297,6 @@ func readExact(r io.Reader, size uint64) ([]byte, error) {
 // baseCache keeps recently inflated pack objects, keyed by pack and offset,
 // within a byte budget; the oldest entries are evicted first.
 type baseCache struct {
-	limit int
 	used  int
 	m     map[cacheKey]cacheEntry
 	order []cacheKey
@@ -332,7 +319,7 @@ func (c *baseCache) get(p *pack, off int64) (ObjectType, []byte, bool) {
 }
 
 func (c *baseCache) put(p *pack, off int64, t ObjectType, data []byte) {
-	if len(data) > c.limit/4 {
+	if len(data) > baseCacheBytes/4 {
 		return // too large to be worth holding
 	}
 	k := cacheKey{p, off}
@@ -342,7 +329,7 @@ func (c *baseCache) put(p *pack, off int64, t ObjectType, data []byte) {
 	if _, ok := c.m[k]; ok {
 		return
 	}
-	for c.used+len(data) > c.limit && len(c.order) > 0 {
+	for c.used+len(data) > baseCacheBytes { // data is at most a quarter of it, so older entries remain
 		old := c.order[0]
 		c.order = c.order[1:]
 		c.used -= len(c.m[old].data)

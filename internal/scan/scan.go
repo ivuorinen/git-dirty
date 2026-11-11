@@ -21,7 +21,6 @@ type Options struct {
 	Root     string
 	MaxDepth int      // directories deeper than this below Root are not entered
 	Exclude  []string // directory basenames never entered
-	Workers  int      // concurrent inspections; 0 means GOMAXPROCS
 	Inspect  gitstat.Options
 }
 
@@ -54,13 +53,9 @@ type Item struct {
 func Run(ctx context.Context, opts Options) <-chan Item {
 	out := make(chan Item, 64)
 	jobs := make(chan Item, 64)
-	workers := opts.Workers
-	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0)
-	}
 
 	var wg sync.WaitGroup
-	for range workers {
+	for range runtime.GOMAXPROCS(0) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -71,7 +66,7 @@ func Run(ctx context.Context, opts Options) <-chan Item {
 				j.Result = gitstat.Inspect(ctx, j.Path, opts.Inspect)
 				// A bare repository's line counts its worktrees; when they
 				// could not be listed, it shows why instead of a count.
-				if j.listErr != nil && j.Result.Bare && j.Result.Err == nil {
+				if j.listErr != nil && j.Result.Bare {
 					j.Result.Err = fmt.Errorf("worktrees: %w", j.listErr)
 				}
 				send(ctx, out, j)
@@ -199,7 +194,7 @@ func (d *discoverer) worktree(rel []string, wt gitrepo.Worktree) bool {
 	it := Item{Path: wt.Path, Rel: slices.Concat(rel, []string{wt.ID}), Worktree: true}
 	if wt.Err != nil {
 		it.Kind = Repo
-		it.Result = gitstat.Result{Path: wt.Path, Err: fmt.Errorf("worktree: %w", wt.Err)}
+		it.Result = gitstat.Result{Err: fmt.Errorf("worktree: %w", wt.Err)}
 
 		return send(d.ctx, d.out, it)
 	}
