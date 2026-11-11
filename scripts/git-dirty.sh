@@ -990,7 +990,7 @@ Status indicators:
 
 Example:
   $bin ~/Projects
-  $bin -d 3 -e 'build,dist' ~/Code
+  $bin -m 3 -e 'build,dist' ~/Code
 EOF
 }
 
