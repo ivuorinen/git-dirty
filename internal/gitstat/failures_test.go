@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -91,8 +92,13 @@ const (
 )
 
 // wantGitRefuses fails the test unless git cannot list dir's untracked files.
+// Its callers make an exclude file a directory, which only git for Windows
+// reads as having no patterns, so there they are skipped.
 func wantGitRefuses(t *testing.T, dir string) {
 	t.Helper()
+	if runtime.GOOS == goosWindows {
+		t.Skip("git for Windows reads a directory as an exclude file with no patterns")
+	}
 	if out, code := gitCode(t, dir, "ls-files", "--others", "--exclude-standard"); code == 0 {
 		t.Fatalf("fixture: git accepts it: %s", out)
 	}

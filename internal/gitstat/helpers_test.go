@@ -65,6 +65,9 @@ func isolateGitEnv(home string) error {
 // mainBranch is the initial branch of every repository the tests create.
 const mainBranch = "main"
 
+// goosWindows is runtime.GOOS on Windows.
+const goosWindows = "windows"
+
 const baseGitconfig = "[init]\n\tdefaultBranch = " + mainBranch + "\n" +
 	"[protocol \"file\"]\n\tallow = always\n" +
 	"[commit]\n\tgpgsign = false\n" +

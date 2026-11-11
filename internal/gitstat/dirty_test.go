@@ -124,7 +124,7 @@ func TestModified(t *testing.T) { forEachFormat(t, testModified) }
 func testModified(t *testing.T) {
 	t.Helper()
 	type fixture func(t *testing.T) string
-	unix := runtime.GOOS != "windows"
+	unix := runtime.GOOS != goosWindows
 	tests := []struct {
 		name  string
 		setup fixture
@@ -653,7 +653,7 @@ func testUntracked(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.unix && runtime.GOOS == "windows" {
+			if tt.unix && runtime.GOOS == goosWindows {
 				t.Skip("needs symlinks")
 			}
 			dir := tt.setup(t)
