@@ -68,11 +68,11 @@ run = "go test ./..."
 #
 # gobco takes one package per run: for ./... it prints "nothing to instrument"
 # and exits 0. So the task runs it per package, and assigns the list first
-# because a pipeline would hide go list failing. gobco also type-checks every
-# file in a directory whatever its build constraints (rillig/gobco#40), where
-# proc_windows.go redeclares what proc_unix.go declares, and it has no option
-# to skip a file. So it runs in a copy without that file, and without what it
-# would otherwise copy again for each package.
+# because errexit does not see go list fail in a for loop's list. gobco also
+# type-checks every file in a directory whatever its build constraints
+# (rillig/gobco#40), where proc_windows.go redeclares what proc_unix.go
+# declares, and it has no option to skip a file. So it runs in a copy without
+# that file, and without what it would otherwise copy again for each package.
 [tasks.test-cov]
 description = "Run tests with statement coverage (go test -cover) and condition coverage (gobco)"
 run = '''
@@ -83,7 +83,7 @@ cp -R . "$tmp"
 rm -rf "$tmp/.git" "$tmp/dist" "$tmp/internal/action/proc_windows.go"
 cd "$tmp"
 pkgs=$(go list -f '.{% raw %}{{slice .ImportPath (len .Module.Path)}}{% endraw %}' ./...)
-printf '%s\n' "$pkgs" | while read -r pkg; do
+for pkg in $pkgs; do
   gobco "$pkg"
 done
 '''
