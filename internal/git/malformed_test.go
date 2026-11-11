@@ -819,9 +819,12 @@ func TestMatchSegments(t *testing.T) {
 	}
 }
 
+// git dies on a directory as an exclude file, but git for Windows reads no
+// patterns from one, as CI's Windows runner shows.
 func TestReadPatterns_Directory(t *testing.T) {
-	if _, err := ReadPatterns(t.TempDir(), nil); err == nil {
-		t.Error("a directory: want the read error")
+	ps, err := ReadPatterns(t.TempDir(), nil)
+	if wantErr := runtime.GOOS != goosWindows; (err != nil) != wantErr || len(ps) != 0 {
+		t.Errorf("a directory: %v, %v, want an error: %v", ps, err, wantErr)
 	}
 }
 

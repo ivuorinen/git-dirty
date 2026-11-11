@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"runtime"
 	"strings"
 )
 
@@ -70,11 +71,12 @@ func trimTrailingSpaces(s string) string {
 // setup_standard_excludes does: a symlink is followed, and a file that cannot
 // be opened has no patterns. Neither has a device, which is what makes
 // core.excludesFile=/dev/null work, and which a repository's config cannot use
-// to block the scan. Only a directory is an error, as git dies on one.
+// to block the scan. Only a directory is an error, as git dies on one, except
+// on Windows, where git reads no patterns from a directory and goes on.
 func ReadPatterns(file string, domain []string) ([]Pattern, error) {
 	f, err := OpenRegular(file)
 	if err != nil {
-		if isDir(file) {
+		if isDir(file) && runtime.GOOS != "windows" {
 			return nil, err
 		}
 
