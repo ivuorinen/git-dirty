@@ -31,7 +31,7 @@ idiomatic_version_file_enable_tools = ["go"]
 "go:github.com/rillig/gobco" = "1.3.4"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.9.0"
 golangci-lint = "2.15.0"
-goreleaser = "2.20.0"
+goreleaser = "2.20.1"
 hyperfine = "2.0.0"
 # Reads the Claude Code hook's JSON input (lint:hook).
 jq = "1.8.2"
